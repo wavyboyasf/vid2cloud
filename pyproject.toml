@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vid2cloud"
+version = "0.1.0"
+description = "Gęsta chmura punktów z wideo klatka po klatce, z modułem skali metrycznej."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "Bartosz Ziółkowski", email = "brtsz.04@gmail.com" }]
+
+# Zależności rdzenia celowo minimalne i bez wersji minimalnych: pakiet instaluje się
+# w env `mast3r-slam` obok torcha i numpy z upstreamu i nie ma prawa ich ruszyć.
+dependencies = [
+    "typer",
+    "numpy",
+]
+
+[project.optional-dependencies]
+# Narzędzia bez GPU — instalować w osobnym env `vid2cloud-tools`.
+tools = ["opencv-contrib-python", "reportlab", "matplotlib"]
+viz = ["viser"]
+video = ["av"]
+
+[project.scripts]
+vid2cloud = "vid2cloud.cli:app"
+
+[tool.setuptools.packages.find]
+include = ["vid2cloud*"]
+
+[tool.pytest.ini_options]
+# Bez tego pytest zbierałby eval/test_c_start_point.py i eval/test_e_distance.py,
+# które są skryptami uruchamianymi ręcznie, nie testami jednostkowymi.
+testpaths = ["tests"]

@@ -1,0 +1,3 @@
+[submodule "third_party/mast3r-slam"]
+	path = third_party/mast3r-slam
+	url = https://github.com/rmurai0610/MASt3R-SLAM

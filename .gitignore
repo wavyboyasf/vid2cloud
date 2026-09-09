@@ -1,0 +1,12 @@
+# Dane wejściowe i wyniki przebiegów — nigdy do repo
+data/
+runs/
+*.ply
+*.mp4
+
+# Python
+__pycache__/
+.venv/
+*.egg-info/
+build/
+dist/
