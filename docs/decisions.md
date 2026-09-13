@@ -24,3 +24,26 @@ przepisywać pipeline.
 kodem cudzym a własnym i wymaga ręcznego nadążania za upstreamem. **Konsekwencja do rozwiązania:**
 te poprawki trzeba trzymać poza submodule — jako serię patchy nakładanych skryptem przy
 instalacji środowiska. Sposób nie jest jeszcze wybrany, pozycja jest w `docs/TODO.md`.
+
+---
+
+## 2026-09-11 — Test C: cięcie klipów copy-albo-re-encode z weryfikacją ffprobe, wyniki hardlinkami
+
+**Co.** `eval/test_c_start_point.py` tnie klip `-c copy` tylko wtedy, gdy pierwsza zdekodowana
+klatka jest keyframe'em w odległości ≤ 1 klatki od startu i nie ma pre-rollu z flagą discard;
+w przeciwnym razie robi re-encode `libx264 -crf 18 -fps_mode passthrough -frames:v N`, gdzie N to
+liczba klatek źródła w [start, end). Chmura i trajektoria z `third_party/mast3r-slam/logs/test_c_<X>/`
+trafiają do `runs/test_c/clip_<X>/` jako hardlinki, a `results.csv` jest budowany ze wszystkich
+`clip_*/config.json` i przenosi kolumny pomiarowe ze swojej poprzedniej wersji.
+
+**Dlaczego.** Zmienną eksperymentu jest start, więc pierwsza klatka musi być dokładna: `-c copy`
+zaczyna od keyframe'u *przed* startem i chowa pre-roll listą edycji MP4, a OpenCV (dekoder silnika
+bez torchcodec) i tak liczy go w długości klipu. Z kolei `-to` przy re-encode przepuszcza jedną
+klatkę po końcu (trim liczy czas od pierwszej zachowanej klatki), stąd `-frames:v N` — dzięki temu
+wszystkie klipy kończą się na tej samej klatce źródła. Hardlinki chronią wyniki w `runs/` przed
+upstreamem, który na starcie kasuje `logs/<save-as>/input.ply`, i nie podwajają zajętości dysku.
+
+**Alternatywa: re-encode wszystkich klipów.** Dałoby jednolity kodek; odrzucone na razie, bo
+projekt testu przewiduje najpierw copy. **Konsekwencja do decyzji autora:** w VID20263.mp4
+keyframe'y są co ~1,0165 s, więc spośród startów 0,3,…,18 s tylko 0 s przechodzi przez copy —
+`clip_0` zostaje w oryginalnym HEVC, pozostałe są w x264 CRF 18.
