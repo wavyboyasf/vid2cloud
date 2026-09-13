@@ -24,13 +24,31 @@ i czekają na swoją sesję (zasada 1 z CLAUDE.md).
       może być niepotrzebny; zweryfikować przed przypięciem commitu submodule.
 - [ ] **Dekodowanie MP4 w upstreamie bez torchcodec.** W env `mast3r-slam` nie ma `torchcodec`, więc
       `MP4Dataset` robi `cv2.VideoCapture` + `CAP_PROP_POS_FRAMES`, czyli seek na każdą klatkę
-      (`mast3r_slam/dataloader.py:257`). Koszt zależy od GOP-u (x264 domyślnie keyint 250, źródło
-      z telefonu ~61). Nie sprawdzono, czy przy klipie VFR skopiowanym `-c copy` (clip_0 testu C)
-      OpenCV trafia zawsze w dobrą klatkę, czy potrafi ją zdublować albo pominąć.
+      (`mast3r_slam/dataloader.py:257`). Koszt zależy od GOP-u — stąd `-g 60` przy cięciu klipów
+      testu C (docs/decisions.md, wpis z 2026-09-13); prawdziwym rozwiązaniem byłby torchcodec albo
+      własne dekodowanie przez adapter. Nie sprawdzono też, czy przy klipie VFR skopiowanym
+      `-c copy` OpenCV trafia zawsze w dobrą klatkę, czy potrafi ją zdublować albo pominąć.
 - [ ] **Znaczniki czasu trajektorii upstreamu przesunięte o 1 klatkę** (z lektury kodu, bez weryfikacji
       przebiegiem): `get_img_shape()` (`main.py:172`) wywołuje `read_img(0)`, które dopisuje znacznik
       (`dataloader.py:264`), więc dla MP4 `timestamps[i] = (i-1)/fps` dla i ≥ 1. Dotyczy `input.txt`
       i nazw PNG keyframe'ów. Ma znaczenie przy mapowaniu keyframe'ów na czas nagrania.
+
+## Skala
+
+- [ ] **Konwencja półpiksela przy przeliczaniu narożników.** `scale/aruco.rescale_corners()`
+      liczy `x' = (x + 0.5) * W/W1 - 0.5 - left` (środki pikseli), upstream w `Intrinsics`
+      (`dataloader.py:292`) pomija poprawkę — różnica ok. 0,43 px przy 4K -> 512. Przy lifcie
+      sprawdzić, którą konwencję zakłada próbkowanie pointmapy, i czy różnica w ogóle wychodzi
+      poza szum. Patrz `docs/decisions.md`, wpis z 2026-09-13.
+- [ ] **`img_downsample` > 1 nie jest obsłużony.** `frame.py:117-120` przerzedza siatkę pointmapy
+      o `config["dataset"]["img_downsample"]` (domyślnie 1 w `config/base.yaml:5`). `input_transform()`
+      zakłada 1 i tego nie sprawdza — jeśli kiedyś zmienimy config, narożniki wylądują nie tam.
+- [ ] **Próg wykrywalności markera zmierzony tylko na syntetyce** (12 px boku, warunki w
+      `docs/decisions.md`). Brakuje pomiaru na nagraniu: kąt, rozmycie ruchu, kompresja, oświetlenie.
+      Do zrobienia razem z pierwszym nagraniem z planszami.
+- [ ] **Biały margines na planszy A3 jest węższy niż bok markera** — przy 120 mm na A3 wychodzi
+      88,5 mm zamiast 120 mm i `make_boards.py` o tym ostrzega. Albo A2 na te markery, albo
+      świadomie zostawić i pilnować jasnego tła wokół planszy w scenie.
 
 ## Ewaluacja
 

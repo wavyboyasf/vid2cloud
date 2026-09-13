@@ -1,6 +1,8 @@
 # Dane wejściowe i wyniki przebiegów — nigdy do repo
 data/
 runs/
+# Wydruki plansz — odtwarzalne z tools/make_boards.py
+boards/
 *.ply
 *.mp4
 

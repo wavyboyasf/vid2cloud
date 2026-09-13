@@ -33,3 +33,6 @@ include = ["vid2cloud*"]
 # Bez tego pytest zbierałby eval/test_c_start_point.py i eval/test_e_distance.py,
 # które są skryptami uruchamianymi ręcznie, nie testami jednostkowymi.
 testpaths = ["tests"]
+# Pakiet nie musi być zainstalowany w env vid2cloud-tools, żeby `pytest` z katalogu
+# repozytorium zaimportował vid2cloud (bez tego działa tylko `python -m pytest`).
+pythonpath = ["."]

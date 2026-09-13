@@ -22,19 +22,23 @@ w dowolnym env; silnik idzie przez --engine-python (pełna ścieżka, nie PATH).
 
 Cięcie (ffmpeg)
 ---------------
-Najpierw `ffmpeg -ss X -to END -i src -c copy -an`. Kopia jest przyjmowana, gdy pierwsza
-zdekodowana klatka jest keyframe'em, jej pts mieści się w 1 klatce od 0 (0 = X po cięciu)
-i pierwszy pakiet nie ma flagi discard. Ten ostatni warunek jest potrzebny, bo przy -c copy
-ffmpeg zaczyna od keyframe'u *przed* X i chowa pre-roll listą edycji MP4 (ujemne pts,
+Domyślnie (--reencode-all) każdy klip jest przekodowany tymi samymi parametrami — także ten,
+którego start wypada na keyframie — żeby kodek był jednolity między porównywanymi klipami:
+`-c:v libx264 -crf 18 -an -fps_mode passthrough -g 60 -frames:v N`. passthrough = każda klatka
+źródła dokładnie raz, bez duplikowania i gubienia; N = liczba klatek źródła w [X, END), bez N
+filtr trim liczy (END - X) od pierwszej zachowanej klatki, nie od X, i przepuszcza jedną klatkę
+po END. -g 60 (X264_KEYINT) zamiast domyślnych 250, bo silnik przewija do każdej klatki osobno
+i koszt dekodowania rośnie z długością GOP-u (docs/decisions.md, wpis z 2026-09-13).
+Weryfikacja: n_frames (zdekodowane) vs n_frames_expected (źródło) w config.json.
+
+Z --no-reencode-all skrypt najpierw próbuje `ffmpeg -ss X -to END -i src -c copy -an`. Kopia jest
+przyjmowana, gdy pierwsza zdekodowana klatka jest keyframe'em, jej pts mieści się w 1 klatce od 0
+(0 = X po cięciu) i pierwszy pakiet nie ma flagi discard. Ten ostatni warunek jest potrzebny, bo
+przy -c copy ffmpeg zaczyna od keyframe'u *przed* X i chowa pre-roll listą edycji MP4 (ujemne pts,
 flaga D): ffprobe pokazuje wtedy pierwszą klatkę z pts 0, ale nagłówek (nb_frames, z którego
 OpenCV bierze długość klipu) liczy też pre-roll. Sprawdzone na VID20263.mp4: keyframe'y co
-~1,0165 s, więc z typowych startów tylko 0 s trafia w keyframe.
-Inaczej re-encode `-c:v libx264 -crf 18 -an -fps_mode passthrough -frames:v N`: passthrough =
-każda klatka źródła dokładnie raz, bez duplikowania i gubienia; N = liczba klatek źródła
-w [X, END). N jest potrzebne, bo filtr trim liczy (END - X) od pierwszej zachowanej klatki,
-nie od X, i samo -to przepuszcza jedną klatkę po END. Z N każdy klip kończy się na tej samej
-klatce źródła; -c copy od 0 s kończy się dokładnie (1801 = 1801 klatek, sprawdzone).
-Weryfikacja: n_frames (zdekodowane) vs n_frames_expected (źródło) w config.json.
+~1,0165 s, więc z typowych startów tylko 0 s trafia w keyframe (i kończy się dokładnie,
+1801 = 1801 klatek).
 Rotacja: re-encode stosuje display matrix (domyślne -autorotate) i wychodzi 2160x3840 bez
 metadanych rotacji; -c copy zostawia 3840x2160 + rotation=-90. config.json zapisuje wymiary
 kodowane, rotację z metadanych, wymiary po rotacji oraz to, co faktycznie zwraca pierwsza
@@ -103,6 +107,10 @@ SEGMENTS = ("W1", "W2")
 # Czas w nagraniu źródłowym [s], w którym wzorzec jest w kadrze; oś X regresji: t - start_s.
 SEGMENT_TIME_S = {"W1": 19.0, "W2": 24.0}
 EXPECTED_DISPLAY_WH = (2160, 3840)
+# -g dla libx264. Domyślne 250 dawało 480 s przebiegu silnika na 12-sekundowym klipie:
+# upstreamowy MP4Dataset bez torchcodec przewija do każdej klatki osobno, więc koszt rośnie
+# z długością GOP-u. 60 jest zbliżone do źródła (keyframe co ~61 klatek).
+X264_KEYINT = 60
 ENGINE_PYTHON_DEFAULT = "~/miniforge3/envs/mast3r-slam/bin/python"
 # Składowe ścieżki, po których upstreamowy load_dataset() wybrałby inny loader niż MP4.
 ENGINE_PATH_KEYWORDS = {"tum", "euroc", "eth3d", "7-scenes", "realsense", "webcam"}
@@ -261,7 +269,7 @@ def probe_engine_decoder(engine_python: Path, path: Path) -> dict:
 
 
 def prepare_clip(src: Path, src_info: dict, start: float, end: float, clip_dir: Path,
-                 engine_python: Path) -> dict:
+                 engine_python: Path, reencode_all: bool) -> dict:
     name = clip_dir.name
     cfg_path, mp4 = clip_dir / "config.json", clip_dir / "input.mp4"
     if cfg_path.exists() and mp4.exists():
@@ -282,26 +290,33 @@ def prepare_clip(src: Path, src_info: dict, start: float, end: float, clip_dir: 
 
     tmp = clip_dir / "input.tmp.mp4"
     cut_in = ["-ss", str(start), "-to", str(end), "-i", str(src)]
-    copy_cmd = FFMPEG + cut_in + ["-c", "copy", "-an", str(tmp)]
-    run(copy_cmd)
-    ff, fp = first_frame(tmp), first_packet(tmp)
-    reasons = []
-    if ff is None or int(ff.get("key_frame", 0)) != 1:
-        reasons.append("pierwsza zdekodowana klatka nie jest keyframe'em")
-    if ff is not None and abs(float(ff["pts_time"])) > frame_s:
-        reasons.append("pts pierwszej klatki odbiega od startu o > 1 klatkę")
-    if fp is None or "D" in fp.get("flags", ""):
-        reasons.append("pre-roll od keyframe'u przed startem (pakiety z flagą discard)")
+    copy_cmd, ff, fp = None, None, None
+    if reencode_all:
+        # Jednolity kodek między klipami: nie próbujemy -c copy nawet przy starcie na keyframie.
+        reasons = ["--reencode-all"]
+    else:
+        copy_cmd = FFMPEG + cut_in + ["-c", "copy", "-an", str(tmp)]
+        run(copy_cmd)
+        ff, fp = first_frame(tmp), first_packet(tmp)
+        reasons = []
+        if ff is None or int(ff.get("key_frame", 0)) != 1:
+            reasons.append("pierwsza zdekodowana klatka nie jest keyframe'em")
+        if ff is not None and abs(float(ff["pts_time"])) > frame_s:
+            reasons.append("pts pierwszej klatki odbiega od startu o > 1 klatkę")
+        if fp is None or "D" in fp.get("flags", ""):
+            reasons.append("pre-roll od keyframe'u przed startem (pakiety z flagą discard)")
 
     reencode_cmd = None
     if reasons:
-        print(f"[{name}] -c copy odrzucone: {'; '.join(reasons)}")
-        print(f"[{name}] re-encode libx264 CRF 18 ({end - start:g} s 4K, to chwilę potrwa)")
+        if copy_cmd is not None:
+            print(f"[{name}] -c copy odrzucone: {'; '.join(reasons)}")
+        print(f"[{name}] re-encode libx264 CRF 18, GOP {X264_KEYINT} "
+              f"({end - start:g} s 4K, to chwilę potrwa)")
         # -frames:v: filtr trim liczy (END - X) od pierwszej zachowanej klatki, nie od X,
         # więc samo -to wpuszcza klatkę źródła tuż po END (dla X=18: 30,0108 s).
         reencode_cmd = FFMPEG + ["-stats"] + cut_in + [
             "-c:v", "libx264", "-crf", "18", "-an", "-fps_mode", "passthrough",
-            "-frames:v", str(len(in_range)), str(tmp)]
+            "-g", str(X264_KEYINT), "-frames:v", str(len(in_range)), str(tmp)]
         run(reencode_cmd, capture=False)
     else:
         print(f"[{name}] -c copy przyjęte (start na keyframe'ie)")
@@ -336,6 +351,7 @@ def prepare_clip(src: Path, src_info: dict, start: float, end: float, clip_dir: 
         "first_frame_src_s": in_range[0],
         "cut": {
             "ffmpeg_version": ffmpeg_version(),
+            "copy_attempted": copy_cmd is not None,
             "copy_cmd": copy_cmd,
             "copy_first_frame": ff,
             "copy_first_packet": fp,
@@ -600,6 +616,9 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     p.add_argument("--engine-dir", default="third_party/mast3r-slam")
     p.add_argument("--config", default="config/base.yaml", help="względem --engine-dir")
     p.add_argument("--engine-python", default=ENGINE_PYTHON_DEFAULT)
+    p.add_argument("--reencode-all", action=argparse.BooleanOptionalAction, default=True,
+                   help="przekoduj każdy klip tymi samymi parametrami, także gdy start wypada "
+                        "na keyframie (domyślnie); --no-reencode-all przywraca próbę -c copy")
     p.add_argument("--dry-run", action="store_true", help="tylko cięcie i results.csv")
     p.add_argument("--fill", metavar="MEASURED_CSV", help="ręczne pomiary: clip,W1_measured_m,W2_measured_m")
     p.add_argument("--reference", metavar="REFERENCE_CSV", help="segment,ref_m (z --fill)")
@@ -652,8 +671,8 @@ def main(argv: list[str] | None = None) -> int:
     engine = None if args.dry_run else engine_setup(args, engine_python)
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    cfgs = [prepare_clip(src, src_info, s, end, out_dir / clip_name(s), engine_python)
-            for s in starts]
+    cfgs = [prepare_clip(src, src_info, s, end, out_dir / clip_name(s), engine_python,
+                         args.reencode_all) for s in starts]
     print(f"results.csv: {write_results(out_dir)}")
     if engine is None:
         return 0

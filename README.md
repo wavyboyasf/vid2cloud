@@ -35,6 +35,37 @@ pip install -e ".[tools]"
 
 Pozostałe extras: `viz` (podgląd 3D w viser), `video` (PyAV do dekodowania).
 
+## Wzorce skali (ArUco)
+
+Skala metryczna bierze się **wyłącznie** z fizycznego wzorca, nigdy z prioru modelu.
+Plansze do druku generuje `tools/make_boards.py` (env `vid2cloud-tools`):
+
+```bash
+# plansze kontrolne: 8 stron A3, marker 120 mm, po jednym na stronę
+python tools/make_boards.py --size-mm 120 --ids 0-7 --page A3
+
+# łata skali: 2 strony A4 z krzyżem osiowym, do naklejenia na końce listwy
+python tools/make_boards.py --scalebar
+```
+
+Każdy przebieg zapisuje PDF i `boards.json` (`{id, dict, nominal_size_mm}`) we własnym
+podkatalogu `boards/`. Marker jest wstawiany do PDF jako bitmapa ≥ 600 dpi o boku będącym
+wielokrotnością 6 pikseli (4 komórki danych + 2 komórki bordera DICT_4X4_50) — wektor
+przeskalowany przez drukarkę rozmywałby krawędzie komórek.
+
+> **Po wydruku zmierz bok markera suwmiarką i wpisz rzeczywistą wartość do `targets.json`.**
+> Drukarki i kserokopiarki skalują wydruk o 1–3 % („dopasuj do strony", marginesy sprzętowe),
+> więc `nominal_size_mm` z `boards.json` jest tylko punktem odniesienia, a nie wymiarem
+> wzorca. Cała skala chmury wisi na tej jednej liczbie.
+
+Detekcja na zdjęciu wydruku albo na klatce wideo — do sprawdzenia, czy wydruk w ogóle
+się czyta:
+
+```bash
+python -m vid2cloud.scale.aruco zdjecie.jpg --out debug.jpg     # narożniki, ID, JSON
+python -m vid2cloud.scale.aruco --video klip.mp4 --frame 120 --out debug.jpg
+```
+
 ## Silnik
 
 Upstream nie jest częścią tego repozytorium — dodaje się go jako submodule:
