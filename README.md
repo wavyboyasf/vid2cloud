@@ -5,7 +5,7 @@ klatka po klatce, używając sieci z priorami geometrycznymi. Silnikiem rekonstr
 MASt3R-SLAM podpięty jako submodule i nietykany; wkładem własnym są warstwa wejścia
 (sekwencyjne dekodowanie, bufor, selekcja klatek), moduł skali metrycznej opartej na
 fizycznych wzorcach ArUco oraz skrypty ewaluacyjne. Wyniki walidowane są względem
-Agisoft Metashape, lidaru i pomiarów tachimetrycznych w CloudCompare.
+Reality Scan, lidaru i pomiarów tachimetrycznych w CloudCompare.
 
 ## Instalacja
 
