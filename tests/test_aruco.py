@@ -5,6 +5,8 @@ zasada 2). Reimplementacja przekształcenia wejścia silnika jest sprawdzana wzg
 PIL, czyli tej samej biblioteki, której używa `mast3r_utils.resize_img()`.
 """
 
+import struct
+
 import cv2
 import numpy as np
 import PIL.Image
@@ -202,3 +204,86 @@ def test_rescale_corners_accepts_array_and_dict():
     assert isinstance(array_out, np.ndarray) and array_out.shape == (4, 2)
     assert isinstance(dict_out, dict) and set(dict_out) == {3}
     assert dict_out[3] == pytest.approx(array_out)
+
+
+# --------------------------------------------------------------------------- #
+# Rotacja z metadanych kontenera
+# --------------------------------------------------------------------------- #
+
+#: Display matrix z `VID_20260921_125536.mp4` (telefon, nagranie pionowe): dziewięć int32
+#: 16.16, ffprobe raportuje dla niej `rotation=-90`. Sprawdzone też tak, że obrót
+#: `ROTATE_90_CLOCKWISE` zgadza się z klatką, którą wydaje `cv2.VideoCapture` (ten stosuje
+#: rotację sam) — docs/decisions.md, wpis z 2026-10-02.
+PHONE_PORTRAIT_MATRIX = (0, 65536, 0, -65536, 0, 0, 0, 0, 1 << 30)
+
+QUARTER_TURNS = {
+    0: (65536, 0, 0, 0, 65536, 0, 0, 0, 1 << 30),
+    -90: PHONE_PORTRAIT_MATRIX,
+    90: (0, -65536, 0, 65536, 0, 0, 0, 0, 1 << 30),
+    180: (-65536, 0, 0, 0, -65536, 0, 0, 0, 1 << 30),
+}
+
+
+@pytest.mark.parametrize("expected,values", sorted(QUARTER_TURNS.items()))
+def test_parse_display_matrix_recognises_quarter_turns(expected, values):
+    """Kąt liczony jak `av_display_rotation_get()`: -atan2(m[1], m[0]), zaokrąglony do 90°."""
+    assert aruco.parse_display_matrix(struct.pack("<9i", *values)) == expected
+
+
+def test_parse_display_matrix_snaps_and_normalises():
+    """Macierz obrócona o 89,6° to w praktyce 90°, a 270° zapisujemy jako -90°."""
+    almost = (int(round(np.cos(np.radians(-89.6)) * 65536)),
+              int(round(np.sin(np.radians(-89.6)) * 65536)), 0, 0, 0, 0, 0, 0, 1 << 30)
+    assert aruco.parse_display_matrix(struct.pack("<9i", *almost)) == 90
+
+    turn_270 = (int(round(np.cos(np.radians(-270)) * 65536)),
+                int(round(np.sin(np.radians(-270)) * 65536)), 0, 0, 0, 0, 0, 0, 1 << 30)
+    assert aruco.parse_display_matrix(struct.pack("<9i", *turn_270)) == -90
+
+
+def test_parse_display_matrix_zero_matrix_is_no_rotation():
+    assert aruco.parse_display_matrix(struct.pack("<9i", *([0] * 9))) == 0
+
+
+def test_parse_display_matrix_rejects_wrong_length():
+    with pytest.raises(ValueError, match="36 bajtów"):
+        aruco.parse_display_matrix(b"\x00" * 16)
+
+
+def test_apply_rotation_matches_cv2_and_round_trips():
+    """Obrót o -90° daje to samo co `ROTATE_90_CLOCKWISE`, a para -90/+90 wraca do oryginału."""
+    rng = np.random.default_rng(7)
+    image = rng.integers(0, 256, size=(6, 10, 3), dtype=np.uint8)
+
+    turned = aruco.apply_rotation(image, -90)
+    assert turned.shape == (10, 6, 3)
+    assert np.array_equal(turned, cv2.rotate(image, cv2.ROTATE_90_CLOCKWISE))
+    assert np.array_equal(aruco.apply_rotation(turned, 90), image)
+    assert np.array_equal(aruco.apply_rotation(image, 180), cv2.rotate(image, cv2.ROTATE_180))
+
+
+def test_apply_rotation_zero_returns_input_untouched():
+    image = np.zeros((4, 4, 3), dtype=np.uint8)
+    assert aruco.apply_rotation(image, 0) is image
+
+
+def test_apply_rotation_rejects_angle_it_cannot_do():
+    with pytest.raises(ValueError, match="nie umiem obrócić"):
+        aruco.apply_rotation(np.zeros((4, 4, 3), dtype=np.uint8), 45)
+
+
+def test_rotation_does_not_change_marker_side_but_changes_shape():
+    """Po co to w ogóle testować: bok markera jest niezmiennikiem obrotu, kadr nie jest.
+
+    Dlatego CSV-ki podglądu z `--rotate` i `--no-rotate` mają te same boki, a `ids/`
+    i lift (współrzędne narożników) muszą wiedzieć, w której orientacji pracują.
+    """
+    scene = np.full((240, 320), 255, np.uint8)
+    scene[40:100, 60:120] = cv2.aruco.generateImageMarker(aruco.get_dictionary(), 7, 60)
+    turned = aruco.apply_rotation(scene, -90)
+    assert turned.shape[:2] == scene.shape[:2][::-1]
+
+    before = aruco.detect(scene)[7]
+    after = aruco.detect(turned)[7]
+    side = lambda q: np.mean([np.linalg.norm(q[i] - q[(i + 1) % 4]) for i in range(4)])
+    assert side(after) == pytest.approx(side(before), abs=0.05)

@@ -45,9 +45,14 @@ Zależności (opencv-contrib-python) instalujemy w env vid2cloud-tools, nie mast
 from __future__ import annotations
 
 import argparse
+import csv
 import json
+import math
+import struct
 import sys
+import time
 from dataclasses import dataclass, asdict
+from fractions import Fraction
 from pathlib import Path
 from typing import Optional
 
@@ -62,6 +67,14 @@ MODEL_INPUT_SIZE = 512
 #: Kolejność narożników z cv2.aruco: zgodnie z ruchem wskazówek zegara od lewego
 #: górnego rogu markera (w jego własnym układzie, nie w układzie obrazu).
 CORNER_ORDER = ("top_left", "top_right", "bottom_right", "bottom_left")
+
+#: Kąt z display matrix (konwencja ffprobe) -> obrót OpenCV do orientacji wyświetlania.
+ROTATE_CODE = {
+    -90: cv2.ROTATE_90_CLOCKWISE,
+    90: cv2.ROTATE_90_COUNTERCLOCKWISE,
+    180: cv2.ROTATE_180,
+    -180: cv2.ROTATE_180,
+}
 
 
 # --------------------------------------------------------------------------- #
@@ -295,13 +308,78 @@ def to_json(
 
 
 # --------------------------------------------------------------------------- #
+# Rotacja z metadanych
+# --------------------------------------------------------------------------- #
+
+
+def parse_display_matrix(data: bytes) -> int:
+    """Kąt obrotu [stopnie] z macierzy wyświetlania MP4; konwencja jak `ffprobe`.
+
+    `data` to 36 bajtów side data typu DISPLAYMATRIX: dziewięć int32 little-endian
+    w zapisie stałoprzecinkowym 16.16. Kąt liczymy jak `av_display_rotation_get()`
+    w ffmpeg — `-atan2(m[1], m[0])` — i zaokrąglamy do wielokrotności 90 stopni,
+    bo tylko takie obroty robi telefon, a tylko takie umie `cv2.rotate`.
+    """
+    if len(data) != 36:
+        raise ValueError(f"display matrix ma 36 bajtów, dostałem {len(data)}")
+    values = struct.unpack("<9i", data)
+    a, b = values[0] / 65536.0, values[1] / 65536.0
+    if a == 0.0 and b == 0.0:
+        return 0
+    snapped = int(round(-math.degrees(math.atan2(b, a)) / 90.0)) * 90
+    snapped %= 360
+    return snapped - 360 if snapped > 180 else snapped
+
+
+def frame_rotation(frame) -> int:
+    """Kąt rotacji klatki PyAV z jej side data; 0, gdy metadanych nie ma.
+
+    Rotacja siedzi w kontenerze, nie w obrazie: PyAV wydaje piksele tak, jak leżą
+    w pliku, a `cv2.VideoCapture` (czyli dekoder upstreamu) stosuje ją sam. Żeby
+    obie ścieżki patrzyły na ten sam kadr, musimy ją odtworzyć po swojej stronie.
+    """
+    for side_data in frame.side_data:
+        name = getattr(getattr(side_data, "type", None), "name", "") or str(getattr(side_data, "type", ""))
+        if "DISPLAYMATRIX" in name.upper():
+            return parse_display_matrix(bytes(side_data))
+    return 0
+
+
+def apply_rotation(image_bgr: np.ndarray, rotation: int) -> np.ndarray:
+    """Obrót klatki do orientacji wyświetlania. `rotation` jak z `frame_rotation()`.
+
+    Na długość boku markera w pikselach obrót nie ma wpływu (jest obrotem o wielokrotność
+    90 stopni, bez interpolacji), ale na współrzędne narożników i na kształt klatki — ma.
+    """
+    if rotation == 0:
+        return image_bgr
+    try:
+        return cv2.rotate(image_bgr, ROTATE_CODE[rotation])
+    except KeyError:
+        raise ValueError(f"nie umiem obrócić o {rotation} stopni; umiem {sorted(ROTATE_CODE)}") from None
+
+
+def video_rotation(path: Path) -> int:
+    """Kąt rotacji nagrania: dekoduje pierwszą klatkę i czyta jej display matrix."""
+    import av  # lokalnie: bez wideo moduł nie potrzebuje PyAV
+
+    with av.open(str(path)) as container:
+        stream = container.streams.video[0]
+        for frame in container.decode(stream):
+            return frame_rotation(frame)
+    raise ValueError(f"{path}: nie udało się zdekodować żadnej klatki")
+
+
+# --------------------------------------------------------------------------- #
 # CLI
 # --------------------------------------------------------------------------- #
 
 
-def read_video_frame(path: Path, index: int) -> np.ndarray:
+def read_video_frame(path: Path, index: int, rotate: bool = True) -> np.ndarray:
     """Klatka nr `index` z pliku wideo, dekodowana sekwencyjnie PyAV (CLAUDE.md: bez seeka).
 
+    Przy `rotate=True` stosujemy rotację z metadanych kontenera (`frame_rotation()`),
+    czyli dajemy ten sam kadr, który widzi `cv2.VideoCapture` w dekoderze upstreamu.
     To jest narzędzie diagnostyczne — przy dużym `--frame` po prostu czeka.
     """
     import av  # lokalnie: bez --video moduł nie potrzebuje PyAV
@@ -313,8 +391,122 @@ def read_video_frame(path: Path, index: int) -> np.ndarray:
         stream.thread_type = "AUTO"
         for i, frame in enumerate(container.decode(stream)):
             if i == index:
-                return frame.to_ndarray(format="bgr24")
+                image = frame.to_ndarray(format="bgr24")
+                return apply_rotation(image, frame_rotation(frame)) if rotate else image
     raise ValueError(f"{path} ma mniej niż {index + 1} klatek")
+
+
+def _label(canvas: np.ndarray, text: str, org: tuple[int, int], scale: float,
+           color=(255, 255, 255), bg=(0, 0, 0)) -> None:
+    """Tekst na ciemnym prostokącie — czytelny niezależnie od tła sceny."""
+    (tw, th), base = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, scale, 2)
+    x, y = org
+    cv2.rectangle(canvas, (x - 4, y - th - 6), (x + tw + 4, y + base + 2), bg, -1)
+    cv2.putText(canvas, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, scale, color, 2, cv2.LINE_AA)
+
+
+def render_video(
+    video: Path,
+    out_path: Path,
+    dict_name: str = DEFAULT_DICT,
+    width: int = 1920,
+    min_px: float = 15.0,
+    rotate: bool = True,
+) -> dict:
+    """Film podglądu z obrysami markerów na każdej klatce + CSV per klatka obok.
+
+    Dekodowanie sekwencyjne PyAV, detekcja na pełnej klatce (`detect()`), liczby z
+    `to_json()` — te same co w trybie pojedynczej klatki. Obrysy są rysowane dopiero na
+    klatce zmniejszonej tak, żeby dłuższy bok miał `width`. Kolor to tylko wizualizacja
+    progu `min_px` boku przy 512 px (zielony >= próg, czerwony poniżej); wartości są w CSV.
+
+    Przy `rotate=True` (domyślnie) klatka jest obracana zgodnie z metadanymi kontenera,
+    zanim pójdzie do detekcji — czyli pracujemy na tym kadrze, który widzi `cv2.VideoCapture`
+    w dekoderze upstreamu. Rotację czytamy raz, z pierwszej klatki. Na bok markera w pikselach
+    obrót nie wpływa; na współrzędne narożników i na kształt kadru — wpływa.
+    """
+    import av
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    csv_path = out_path.with_suffix(".csv")
+    green, red = (60, 200, 60), (40, 40, 230)
+    per_id: dict[int, dict] = {}
+    rotation: Optional[int] = None
+    n_frames, t0 = 0, time.monotonic()
+
+    with av.open(str(video)) as src, av.open(str(out_path), "w") as dst, \
+            open(csv_path, "w", newline="", encoding="utf-8") as fcsv:
+        ist = src.streams.video[0]
+        ist.thread_type = "AUTO"
+        rate = Fraction(ist.average_rate).limit_denominator(1001) if ist.average_rate else Fraction(30)
+        total = ist.frames or 0
+        ost = None
+        log = csv.writer(fcsv)
+        log.writerow(["frame", "time_s", "id", "mean_side_px", "side_px_512", "error"])
+
+        for i, frame in enumerate(src.decode(ist)):
+            image = frame.to_ndarray(format="bgr24")
+            if rotate:
+                if rotation is None:
+                    rotation = frame_rotation(frame)
+                image = apply_rotation(image, rotation)
+            h, w = image.shape[:2]
+            if ost is None:
+                shrink = min(1.0, width / max(w, h))
+                out_w = int(round(w * shrink)) // 2 * 2
+                out_h = int(round(h * shrink)) // 2 * 2
+                ost = dst.add_stream("libx264", rate=rate)
+                ost.width, ost.height, ost.pix_fmt = out_w, out_h, "yuv420p"
+                ost.options = {"crf": "20", "preset": "veryfast"}
+            t = frame.time if frame.time is not None else float(i / rate)
+
+            error = ""
+            try:
+                detections = detect(image, dict_name=dict_name)
+            except ValueError as exc:  # duplikat ID — nie przerywamy całego filmu
+                detections, error = {}, str(exc)
+            markers = to_json(detections, str(video), (h, w), dict_name, i)["markers"]
+
+            canvas = cv2.resize(image, (out_w, out_h), interpolation=cv2.INTER_AREA)
+            k = out_w / w
+            for m in markers:
+                side512 = m["mean_side_px_model_input"]
+                color = green if side512 >= min_px else red
+                pts = np.round(np.asarray(m["corners"]) * k).astype(np.int32)
+                cv2.polylines(canvas, [pts], isClosed=True, color=color, thickness=3)
+                cv2.circle(canvas, tuple(int(v) for v in pts[0]), 5, (0, 0, 255), -1)
+                x, y = int(pts[:, 0].min()), int(pts[:, 1].min()) - 8
+                _label(canvas, f"ID {m['id']}  {side512:.1f} px przy 512", (max(x, 4), max(y, 24)), 0.7, color)
+                log.writerow([i, f"{t:.4f}", m["id"], f"{m['mean_side_px']:.2f}", f"{side512:.2f}", error])
+                stats = per_id.setdefault(m["id"], {"frames": 0, "min_512": side512, "max_512": side512, "below": 0})
+                stats["frames"] += 1
+                stats["min_512"] = min(stats["min_512"], side512)
+                stats["max_512"] = max(stats["max_512"], side512)
+                stats["below"] += side512 < min_px
+            if not markers:
+                log.writerow([i, f"{t:.4f}", "", "", "", error])
+
+            hud = f"klatka {i}" + (f"/{total - 1}" if total else "") + f"  {t:6.2f} s  wykryto {len(markers)}"
+            _label(canvas, hud, (12, 34), 0.9)
+            _label(canvas, f"prog {min_px:g} px przy 512: zielony >=, czerwony <", (12, 72), 0.6)
+            if error:
+                _label(canvas, error, (12, 106), 0.6, red)
+
+            vf = av.VideoFrame.from_ndarray(canvas, format="bgr24")
+            vf.pts, vf.time_base = i, 1 / rate
+            for packet in ost.encode(vf):
+                dst.mux(packet)
+            n_frames = i + 1
+            if n_frames % 100 == 0:
+                print(f"  klatka {n_frames}" + (f"/{total}" if total else "")
+                      + f"  ({time.monotonic() - t0:.0f} s)", flush=True)
+
+        if ost is not None:
+            for packet in ost.encode():
+                dst.mux(packet)
+
+    return {"frames": n_frames, "seconds": time.monotonic() - t0, "csv": csv_path,
+            "per_id": per_id, "rotation": rotation or 0}
 
 
 def main(argv: Optional[list[str]] = None) -> int:
@@ -334,16 +526,40 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--dict", dest="dict_name", default=DEFAULT_DICT, help=f"Słownik (domyślnie {DEFAULT_DICT}).")
     parser.add_argument("--out", type=Path, help="Plik PNG/JPG z podglądem detekcji.")
     parser.add_argument("--json", dest="json_path", type=Path, help="Plik JSON; domyślnie obok --out.")
+    parser.add_argument("--render", type=Path, metavar="OUT.mp4",
+                        help="Z --video: film podglądu z obrysami na każdej klatce (+ CSV obok).")
+    parser.add_argument("--width", type=int, default=1920,
+                        help="Dłuższy bok filmu podglądu w px (domyślnie 1920).")
+    parser.add_argument("--no-rotate", dest="rotate", action="store_false",
+                        help="Nie stosuj rotacji z metadanych wideo (domyślnie stosujemy).")
+    parser.add_argument("--min-px", type=float, default=15.0,
+                        help="Próg boku przy 512 px dla koloru obrysu (domyślnie 15).")
     args = parser.parse_args(argv)
 
     if (args.image is None) == (args.video is None):
         parser.error("podaj albo zdjęcie, albo --video (dokładnie jedno)")
 
+    if args.render is not None:
+        if args.video is None:
+            parser.error("--render wymaga --video")
+        if not args.video.exists():
+            parser.error(f"nie ma pliku {args.video}")
+        print(f"{args.video} -> {args.render}")
+        summary = render_video(args.video, args.render, args.dict_name, args.width, args.min_px, args.rotate)
+        print(f"klatek: {summary['frames']}  czas: {summary['seconds']:.0f} s")
+        print(f"rotacja z metadanych: {summary['rotation']} deg"
+              + ("" if args.rotate else " (NIE zastosowana, --no-rotate)"))
+        print(f"film:   {args.render}\nCSV:    {summary['csv']}")
+        for marker_id, st in sorted(summary["per_id"].items()):
+            print(f"  ID {marker_id:>3}  klatek {st['frames']:>5}  px@512 {st['min_512']:6.2f}-{st['max_512']:6.2f}"
+                  f"  poniżej {args.min_px:g}: {st['below']}")
+        return 0
+
     if args.video is not None:
         if not args.video.exists():
             parser.error(f"nie ma pliku {args.video}")
         try:
-            image = read_video_frame(args.video, args.frame)
+            image = read_video_frame(args.video, args.frame, args.rotate)
         except ValueError as exc:
             parser.error(str(exc))
         source, frame_index = str(args.video), args.frame

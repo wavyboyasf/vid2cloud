@@ -130,3 +130,173 @@ roboczej od markera.
 a narożnik jest potem liftowany do 3D, to przy definiowaniu datum skali lepiej opierać się
 na odległości między środkami dwóch markerów łaty (uśrednienie po 4 narożnikach każdego)
 niż na boku pojedynczego markera. Do sprawdzenia w sesji o lifcie.
+
+---
+
+## 2026-09-15 — Pomiar wydruku próbnego A4: drukarka domowa zmniejsza o ok. 2,7 %
+
+**Co zmierzono.** Wydruk `boards/test_A4_150mm/test.pdf` (jedna strona A4, ID 3, nominał
+150,0 mm) na drukarce domowej autora. Bok czarnego kwadratu od zewnętrznej krawędzi do
+zewnętrznej krawędzi, linijką Maped 15 cm z podziałką milimetrową, zdjęcia pomiaru
+w `~/Pobrane/POMIAR CM\`:
+
+| kierunek | odczyt | / 150,0 mm | różnica |
+|---|---|---|---|
+| pion | 145,9 mm | 0,972667 (−2,733 %) | −4,1 mm |
+| poziom | 146,0 mm | 0,973333 (−2,667 %) | −4,0 mm |
+
+Różnica między osiami to 0,1 mm (+0,069 %). Rozdzielczość odczytu linijki milimetrowej
+to ok. 0,5 mm, czyli ok. 0,33 % przy 150 mm — anizotropia jest **poniżej** tej granicy
+i z tego pomiaru nie da się orzec, czy w ogóle istnieje.
+
+**Czego ten pomiar NIE rozstrzyga.** Przyczyny. −2,7 % to wartość typowa zarówno dla
+ustawienia „dopasuj do obszaru drukowania" w sterowniku (skalowanie programowe, do
+wyłączenia), jak i dla mechanicznego skalowania samego urządzenia (nie do wyłączenia).
+Rozstrzygnąłby to drugi wydruk z jawnie ustawioną skalą 100 % / „rozmiar rzeczywisty"
+i ponownym pomiarem — **nie wykonany**. Wniosek zostawiam autorowi.
+
+**Konsekwencja, która nie zależy od przyczyny.** `nominal_size_mm` z `boards.json` nie
+nadaje się na wzorzec skali — 2,7 % to o rząd wielkości więcej niż dokładność, o którą
+w tej pracy chodzi. Każdy wydruk musi mieć własny wpis w `targets.json` ze **zmierzoną**
+wartością. To potwierdza ostrzeżenie wpisane do README i do samego generatora.
+
+**Konsekwencja dla łaty skali: żadna.** Wzorcem jest odległość między środkami dwóch
+markerów na listwie, mierzona po sklejeniu, a nie bok wydrukowanego markera. Skalowanie
+wydruku nie wchodzi do tego rachunku, a środek czworokąta (średnia czterech narożników)
+nie przesuwa się przy skalowaniu ani przy anizotropii. Łatę można więc drukować w domu;
+ksero zostaje potrzebne wyłącznie do dużych plansz.
+
+---
+
+## 2026-09-15 — Skala: współczynnik osobno dla każdego wzorca, jedna liczba tylko jawnie
+
+**Co.** `vid2cloud/scale/estimate.py` liczy współczynnik dla każdego segmentu wzorcowego
+osobno i zwraca listę per segment plus wiersz zbiorczy (mediana, średnia, min, max, std,
+rozrzut). Sprowadzenie do jednej liczby jest oddzielnym, jawnym krokiem (`select_factor()`,
+w CLI `--use median` albo `--use-segment NAZWA`), a jego opis — „mediana z N segmentów"
+albo „segment 'W1'" — trafia razem z kompletem wyników per segment do `<out>.scale.json`
+obok przeskalowanej chmury. Jednostki: `targets.json` w milimetrach, pomiar z chmury
+bezwymiarowy, `factor` przelicza jednostki modelu na **metry**; zamiana mm→m siedzi
+w jednym miejscu (`MM_PER_M` w `_segment_factor()`).
+
+**Dlaczego.** Na chmurze z czerwca ten sam przebieg daje ×1,1489 przy kotwicy (W1)
+i ×1,0000 kilka metrów dalej przy stoliku (W2) — rozrzut 13,86 % wewnątrz jednej mapy
+(uruchomione dziś na `data/own/targets_test.json` + `measured_test.csv`, dane z pomiarów
+11.09). Moduł zwracający jedną liczbę zgubiłby dokładnie ten fakt, o który w tej pracy
+chodzi. Przy rozrzucie powyżej 5 % (`SPREAD_WARN_PCT`) CLI dopisuje linię ostrzeżenia,
+ale liczb nie zmienia i outlierów nie odrzuca.
+
+**Alternatywa: średnia ważona 1/σ².** Dałaby jedną liczbę z niepewnością i wyglądałaby
+poważniej, lecz zakłada, że wszystkie segmenty mierzą tę samą wielkość zaburzoną błędem
+losowym — a różnica między W1 i W2 jest systematyczna (skala zmienia się wzdłuż mapy).
+Odrzucona; gdyby wróciła, to jako pozycja obok listy per segment, nie zamiast niej.
+
+**Niepewność pomiaru: odchylenie próbki, nie błąd mediany.** Przy powtórzeniach
+(5 point-pickingów) `sigma_measured` to odchylenie standardowe próbki, ddof=1 — dla W1
+1,28 cm. Nie σ/√n (≈ 0,6 cm), bo kliknięcia nie są niezależnymi losowaniami: to ten sam
+operator celujący w ten sam, niejednoznacznie zdefiniowany narożnik, więc dzielenie przez
+√n zaniżałoby niepewność. Propagacja jest względna,
+`sigma_factor = factor * sqrt((sigma_ref/ref)² + (sigma_meas/meas)²)`; przy jednym pomiarze
+bez podanej sigmy `sigma_factor` to `None`, nie zero — liczby, której nie znamy, moduł
+nie wymyśla.
+
+**Czego nie uruchomiono.** `scale_ply()` (open3d) — open3d nie jest zainstalowany ani
+w `vid2cloud-tools`, ani w `mast3r-slam`, więc import jest leniwy, a ścieżka `--apply`
+kończy się czytelnym błędem. Testem objęta jest tylko czysta część zapisu
+(`build_scale_record()`). Pozycja w `docs/TODO.md`.
+
+---
+
+## 2026-09-17 — Pierwszy pomiar ArUco na nagraniu: bok markera przy 512 px na 2–3 m (wnętrze)
+
+**Co zmierzono.** Nagranie `data/own/proba_generalna.mp4` (oryginał `VID_4k_poziom.mp4`: h264,
+3840×2160 bez rotacji w metadanych, 30 fps, 39,87 s, 1196 klatek), klatka 30 (1,01 s).
+Detekcja `python -m vid2cloud.scale.aruco` na pełnej klatce, bok przeliczony na wejście modelu
+512×288 (skala 512/3840 = 0,1333 w obu osiach). **Odległości kamera–plansza to szacunek autora,
+nie pomiar.** Wymiary wzorców są nominalne — boku tych wydruków nie mierzono.
+
+| ID | wzorzec (nominał) | odległość (szac.) | bok 4K: śr. / min–max | przy 512: śr. / min–max | min/max boku |
+|---|---|---|---|---|---|
+| 8 | plansza A4, 150 mm | poniżej 2 m | 153,69 / 96,02–214,78 px | 20,49 / 12,80–28,64 px | 0,45 |
+| 10 | plansza A4, 150 mm | ok. 2,2 m | 118,79 / 102,57–136,16 px | 15,84 / 13,68–18,15 px | 0,75 |
+| 48 | łata, 70 mm | ok. 2,5–3 m | 75,56 / 68,86–82,22 px | 10,08 / 9,18–10,96 px | 0,84 |
+| 49 | łata, 70 mm | ok. 2,5–3 m | 56,74 / 54,66–58,94 px | 7,57 / 7,29–7,86 px | 0,93 |
+
+**Warunki.** Plansze A4 leżą płasko na podłodze i są widziane skośnie — stąd rozrzut boków
+(kolumna min/max). Markery łaty są przyklejone na końcach tuby leżącej na łóżku. Kamera z ręki.
+
+**Całe nagranie** (`--render`, `runs/proba/podglad.csv`): średni bok w 4K w klatkach z wykryciem —
+ID 3: 178,64–266,00 px (111 klatek), ID 8: 127,94–232,04 (278), ID 9: 174,32–221,46 (92),
+ID 10: 116,03–166,63 (170), ID 11: 252,69–415,07 (128), ID 48: 68,36–145,89 (385),
+ID 49: 56,22–168,51 (399); ID 12 nie wykryty ani razu. Fałszywe wykrycia ID 17 i 37 — w `docs/TODO.md`.
+Klatki bez wykrycia obejrzane ręcznie: w 200 oba markery łaty są całe w kadrze, ale rozmyte
+ruchem; w 400 widoczne markery są ucięte krawędzią kadru.
+
+**Czego ten pomiar NIE rozstrzyga.**
+- Zależności bok(odległość) ani ogniskowej — odległości są szacunkiem, a plansze na podłodze
+  skrócone perspektywą. Nie wyprowadzam z tego żadnej z tych liczb.
+- Progu detekcji: najmniejszy średni bok prawdziwego markera w całym nagraniu to 56,22 px w 4K,
+  a detektor pracuje na 4K — do 12 px z syntetyki (wpis z 2026-09-13) to nagranie nie dochodzi.
+- Czy 15 px przy 512 wystarcza do liftu — to pytanie do sesji o lifcie. Tu jest tylko zestawienie
+  z tym progiem: średni bok ID 8 i 10 jest powyżej, ID 48 i 49 poniżej; najkrótszy bok ID 8 i 10
+  (12,80 i 13,68 px) też jest poniżej.
+- Zasięgu w terenie — to wnętrze i najwyżej ok. 3 m.
+
+---
+
+## 2026-09-19 — Nagranie zasięgowe: trzy plansze 150 mm na ok. 1,0 / 3,0 / 4,5 m
+
+**Co zmierzono.** `data/own/VID_ODLEGLOSC.mp4` (kopia z `~/Pobrane`; h264, 3840×2160 bez rotacji,
+30 fps, 15,69 s, 465 klatek). Detekcja: `python -m vid2cloud.scale.aruco --video ... --render
+runs/odleglosc/podglad.mp4`, liczby per klatka w `runs/odleglosc/podglad.csv`. Klatki 0–23 to
+jedyny fragment, w którym widać wszystkie trzy plansze naraz; poniżej klatka 0.
+
+**Odległości — szacunek autora, po korekcie.** Autor mierzył je od framugi, przez którą potem
+przeszedł, i po obejrzeniu nagrania skorygował: do każdej wartości trzeba dodać ok. 0,5 m.
+Wartości przyjęte tutaj (0,5 / 2,5 / 4 m + 0,5 m) to nadal szacunek, nie pomiar taśmą.
+
+| ID | odległość (szac.) | bok 4K: śr. / min–max | przy 512: śr. | min/max boku |
+|---|---|---|---|---|
+| 11 | ok. 1,0 m (blat) | 237,89 / 236,59–239,01 px | 31,72 px | 0,99 |
+| 8 | ok. 3,0 m (framuga) | 125,27 / 125,04–125,57 px | 16,70 px | 1,00 |
+| 10 | ok. 4,5 m (drzwi w korytarzu) | 87,74 / 87,40–88,17 px | 11,70 px | 0,99 |
+
+Wszystkie trzy są w tej klatce praktycznie na wprost (min/max ≈ 1), więc skos nie skraca boku.
+
+Odległości są przybliżone, więc tego zapisu nie należy używać do wyprowadzania geometrii
+(ogniskowej, odległości z rozmiaru markera) — twardą częścią pomiaru są boki w pikselach.
+
+**Czego ten pomiar NIE rozstrzyga.** Progu detekcji: wszystkie trzy plansze są wykryte na pełnej
+klatce, najmniejsza ma 87,74 px boku w 4K. Przydatności do liftu też nie — jest tylko zestawienie
+z progiem 15 px przy 512 z planu autora: ID 10 jest poniżej (11,70 px), ID 8 i 11 powyżej.
+W całym nagraniu ID 10 wypadł poniżej progu w 125 z 348 klatek z wykryciem.
+
+---
+
+## 2026-10-02 — Rotacja z metadanych: stosujemy ją u siebie, bo dekoder upstreamu stosuje ją sam
+
+**Co.** `vid2cloud/scale/aruco.py` czyta kąt obrotu z display matrix kontenera
+(`parse_display_matrix()`, `frame_rotation()`, `video_rotation()`) i domyślnie obraca klatkę
+**przed** detekcją — i w `read_video_frame()`, i w `render_video()`. Wyłącza to `--no-rotate`.
+Wcześniej moduł rotacji nie stosował w ogóle (wpis z 2026-09-13 opisywał ją jako nieistotną,
+bo nie zmienia boku markera w pikselach).
+
+**Dlaczego.** Dwa z sześciu nagrań z 21.09 mają `rotation=-90` (`VID_20260921_125536`,
+`VID_20260921_133034`) — telefon trzymany pionowo zapisuje kadr jako 3840x2160 i dokłada
+macierz obrotu. PyAV wydaje piksele tak, jak leżą w pliku, a `cv2.VideoCapture` — czyli
+dekoder `MP4Dataset` upstreamu — stosuje orientację **automatycznie**. Bez tej poprawki nasze
+narożniki byłyby w innym układzie współrzędnych niż pointmapa silnika, co psuje lift, a nie
+tylko podgląd. Kierunek obrotu jest zmierzony, nie zgadnięty: klatka 0 z PyAV obrócona
+`ROTATE_90_CLOCKWISE` zgadza się z klatką z `cv2.VideoCapture` (średnie |diff| 1,7 na kanał,
+różnica konwersji barw), a obrócona w drugą stronę nie (90,1).
+
+**Na zmierzone boki markerów to nie wpływa.** Dłuższy bok kadru to 3840 niezależnie od
+orientacji, więc skala do wejścia modelu jest ta sama (512/3840), a 288 i 512 są
+wielokrotnościami 16, więc crop jest zerowy w obu układach. Liczby z wpisów 2026-09-17
+i 2026-09-19 zostają w mocy; zmienia się kształt kadru i współrzędne narożników.
+
+**Alternatywa: obracać dopiero narożniki, po detekcji.** Taniej (bez obrotu 4K na każdej
+klatce), ale wymaga pamiętania o obrocie w każdym miejscu, które dotyka współrzędnych —
+podgląd, `ids/`, lift, przyszłe ROI. Odrzucone: jedna transformacja przy wejściu jest
+trudniejsza do zgubienia niż cztery poprawki w dalszych krokach. Koszt: obrót o wielokrotność
+90° to przepisanie bufora bez interpolacji, w pomiarze nie wyszedł poza szum czasu renderu.

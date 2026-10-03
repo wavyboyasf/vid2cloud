@@ -46,12 +46,82 @@ i czekają na swoją sesję (zasada 1 z CLAUDE.md).
 - [ ] **Próg wykrywalności markera zmierzony tylko na syntetyce** (12 px boku, warunki w
       `docs/decisions.md`). Brakuje pomiaru na nagraniu: kąt, rozmycie ruchu, kompresja, oświetlenie.
       Do zrobienia razem z pierwszym nagraniem z planszami.
+      *Pierwsze nagranie (17.09, wnętrze, 2–3 m): `docs/decisions.md`, wpis z 2026-09-17 — najmniejszy
+      prawdziwy marker miał 56 px w 4K, więc progu detekcji nie osiąga; rozmycie ruchu obserwowane
+      w klatce 200.*
+- [ ] **Fałszywe wykrycia ArUco na nagraniu** `data/own/proba_generalna.mp4` (17.09, `runs/proba/podglad.csv`):
+      ID 17 w klatkach 164, 657, 1060, 1071 i ID 37 w klatkach 88, 1091; bok 29–37 px w 4K
+      (3,9–5,0 px przy 512). Obejrzane klatki 88, 164 i 1091: płaskie trapezy na nakrętce butelki,
+      szklance i etykiecie — tych ID nie ma w żadnym wydruku. Parametrów detektora nie zmieniano.
+      Do rozstrzygnięcia przy estymacji/lifcie: przyjmować tylko ID z `targets.json`, czy też
+      minimalny bok.
 - [ ] **Biały margines na planszy A3 jest węższy niż bok markera** — przy 120 mm na A3 wychodzi
       88,5 mm zamiast 120 mm i `make_boards.py` o tym ostrzega. Albo A2 na te markery, albo
       świadomie zostawić i pilnować jasnego tła wokół planszy w scenie.
 
+- [ ] **`scale_ply()` nie został uruchomiony — brak open3d.** Nie ma go ani w `vid2cloud-tools`,
+      ani w `mast3r-slam`, więc ścieżka `--apply/--out` w `python -m vid2cloud.scale.estimate`
+      jest napisana i nietknięta. Przy instalacji (`pip install open3d` w `vid2cloud-tools`,
+      nigdy w env silnika) sprawdzić dwie rzeczy: czy pip nie rusza numpy 1.26.4 i co zostaje
+      z chmury MASt3R-SLAM po przejściu przez open3d — kolory i normalne przechodzą, ale
+      niestandardowe właściwości PLY (np. ufność per punkt) giną.
+- [ ] **Wpis łaty skali w `targets.json` czeka na pomiar po sklejeniu** (środa 16.09).
+      `data/own/targets_test.json` ma na razie wyłącznie odcinki kontrolne W1/W2 z 11.09 —
+      nominału z `boards.json` tam nie wpisywać, wartość ma być zmierzona taśmą.
+- [ ] **Dwie drogi do tej samej liczby: `--fill` w `eval/test_c_start_point.py` i moduł skali.**
+      Pomiary W1/W2 w siedmiu chmurach testu C można wprowadzać albo do `results.csv` przez
+      `--fill`, albo do `measured.csv` przez `scale/estimate.py`. Wybrać jedną i trzymać się jej,
+      inaczej będą dwie wersje tych samych liczb.
+
+- [ ] **Fałszywe wykrycia ArUco na nagraniach z 21.09** (`runs/2026-09-21/*/podglad.csv`,
+      zestawienie w `runs/2026-09-21/inventory/ids_summary.csv`). Przy zadeklarowanych ID
+      3, 8, 9, 10, 11, 12 detektor zwrócił dodatkowo 7, 16, 17, 22, 24, 28, 34, 37, 38, 44 —
+      od 1 do 72 klatek, bok przy 512 px zwykle 3–10 px, ale ID 7 miał 40 px (szyba okienna,
+      `ids/ID_07.jpg`), ID 16 — 28,8 px, ID 37 — 16,7 px. Deklaracja rozstawionych ID
+      (`notes/rozstawione_id.txt`, flaga `--ids`) odsiewa je w zestawieniu i w tabeli pomiarów,
+      ale **nie w samej detekcji** — `scale/aruco.py` nadal je wypisuje do CSV i rysuje
+      w podglądzie. Do rozstrzygnięcia przy lifcie, czy filtr ma zejść do detekcji i czy obok
+      listy ID potrzebny jest drugi warunek (minimalny bok, ciągłość w czasie): sam bok nie
+      wystarczy, bo 40 px fałszywki to więcej niż 4,32 px najmniejszego prawdziwego ID 9.
+- [ ] **Łata skali (ID 48/49) nie była na sesji 21.09.** Nie ma jej na żadnym z 71 zdjęć
+      z `photos_targets/` ani w nagraniach. Wzorcem skali dla tej sesji mogą więc być tylko
+      odległości między planszami mierzone taśmą (`notes/pomiary_tasma.csv`), a te są mierzone
+      między markerami stojącymi na statywach — punkt odniesienia trzeba wpisać w kolumnie
+      `punkty_pomiaru`, inaczej nie wiadomo, w co klikać w CloudCompare.
+
+- [ ] **Sesja 21.09 ma dwa rozstawienia plansz.** Wg autora odległości z `notes/targets.json`
+      dotyczą tylko nagrań 125357, 125437, 125536; nagrania 133034, 133043, 133224 są z innym
+      rozstawieniem. `eval/session_inventory.py` nie zna tego podziału — współwidoczność w
+      `pomiary_tasma.csv` i liczby w `ids_summary.csv` sumuje po wszystkich nagraniach, a
+      `targets.json` nie mówi, do których nagrań się odnosi. Potrzebne: druga tabela pomiarów
+      dla drugiego rozstawienia i przypisanie targets.json do listy nagrań (np. kolumna
+      `rozstawienie` w `nagrania.csv`). Nie wiadomo, przy którym rozstawieniu są `photos_targets/`.
+
 ## Ewaluacja
 
+- [ ] **Prawda terenowa to nalot dronowy z planszami szachownicy, nie TLS** (ustalenie
+      autora z promotorem, stan na 2026-09-14). CLAUDE.md wymienia lidar i tachimetr — ten
+      opis jest nieaktualny i trzeba go poprawić albo dopisać, skąd te dwa źródła miałyby się
+      wziąć. **Otwarte pytanie:** skąd model z Metashape'a bierze skalę metryczną? Jeśli z GNSS
+      drona, to porównanie skali vid2cloud z referencją mierzy różnicę dwóch niezależnych
+      źródeł; jeśli z tej samej łaty ArUco co chmura, to nie mierzy nic. Do ustalenia **zanim**
+      powstanie test skali.
+- [ ] **Zasięg ArUco w terenie nie jest zmierzony.** Z geometrii (4K, HFOV ~68°): marker 30 cm
+      z 20 m ma ok. 43 px na pełnej klatce, ale tylko ok. 5,7 px na wejściu modelu 512 px.
+      Detekcja idzie po pełnej klatce, więc wykrycie nie jest wąskim gardłem — jest nim to,
+      czy pointmapa w takim miejscu daje sensowny punkt 3D. Nie sprawdzone; do pomiaru na
+      pierwszym nagraniu zewnętrznym.
+      *Wnętrze, 2–3 m (17.09): bok przy 512 px w `docs/decisions.md`, wpis z 2026-09-17.*
 - [ ] **Brak `log.csv` per klatka w przebiegach testu C.** Test C uruchamia upstreamowy `main.py`
       bez hooków, więc `runs/test_c/clip_*/` mają `config.json`, `log.txt` i `cloud.ply`, ale nie
       logu per klatka z zasady 3 CLAUDE.md. Wymaga przebiegu przez adapter `engine/mast3r_slam.py`.
+
+- [ ] **Skany TLS sali koncertowej leżą nierozpakowane** w `data/2026-09-21/reference_lidar/`
+      (9 archiwów, 8,4 GB, w środku `.e57` z 23.02.2026, np. `ZK-Koncertowa-23022026-05.e57`).
+      To są stanowiska lidarowe pokoju jako referencja — czyli trzecie źródło prawdy terenowej
+      obok nalotu dronowego z szachownicami i rekonstrukcji COLMAP zespołu. Do ustalenia, **zanim**
+      powstanie test skali: które z tych źródeł jest referencją dla czego i skąd każde z nich bierze
+      skalę metryczną. Rozpakowanie i przegląd — osobna sesja.
+- [ ] **Rekonstrukcje COLMAP zespołu** (`data/2026-09-21/reference_colmap/`, 190 plików): nie wiadomo,
+      czy mają skalę metryczną i z czego. Jeśli z tych samych plansz ArUco co nasza chmura, to
+      porównanie z nimi nie mierzy skali, tylko zgodność dwóch rekonstrukcji.
