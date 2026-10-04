@@ -300,3 +300,17 @@ klatce), ale wymaga pamiętania o obrocie w każdym miejscu, które dotyka wspó
 podgląd, `ids/`, lift, przyszłe ROI. Odrzucone: jedna transformacja przy wejściu jest
 trudniejsza do zgubienia niż cztery poprawki w dalszych krokach. Koszt: obrót o wielokrotność
 90° to przepisanie bufora bez interpolacji, w pomiarze nie wyszedł poza szum czasu renderu.
+
+---
+
+## 2026-10-03 — Sesja 21.09: skala ręcznie na 3 nagraniach; nic nie wykluczamy
+Co: 15 odcinków taśmy (5 × 3 nagrania) zmierzone w chmurach upstreamowego main.py; rozrzut
+współczynnika wewnątrz nagrania 11,1 / 15,3 / 12,9 % raportowany jako wynik. Żadne nagranie ani
+odcinek nie jest odrzucany; jakość odcinka opisuje powtarzalność kliknięć (sigma_klikniec / mediana),
+a dwumodalne kliknięcia oznaczają zdublowaną geometrię (pęknięcie mapy), nie dryf.
+Dlaczego: rozrzut skali jest badanym zjawiskiem (dryf skali w monokularnym SLAM-ie) — odrzucanie
+nagrań z dużym rozrzutem usuwałoby z próby dokładnie to, co mierzymy. Próg 5 % z wcześniejszej
+propozycji nie był ustalony przed pomiarem i nie jest używany.
+Alternatywa: kryterium jakości po rozrzucie (odrzucone — miesza zjawisko z błędem pomiaru).
+Literatura: Strasdat, Montiel, Davison 2010 (Scale drift-aware large scale monocular SLAM, RSS);
+Murai, Dexheimer, Davison 2025 (MASt3R-SLAM, CVPR) — Sim(3) i pin pierwszej klatki kluczowej.

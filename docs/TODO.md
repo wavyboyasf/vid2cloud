@@ -99,13 +99,6 @@ i czekają na swoją sesję (zasada 1 z CLAUDE.md).
 
 ## Ewaluacja
 
-- [ ] **Prawda terenowa to nalot dronowy z planszami szachownicy, nie TLS** (ustalenie
-      autora z promotorem, stan na 2026-09-14). CLAUDE.md wymienia lidar i tachimetr — ten
-      opis jest nieaktualny i trzeba go poprawić albo dopisać, skąd te dwa źródła miałyby się
-      wziąć. **Otwarte pytanie:** skąd model z Metashape'a bierze skalę metryczną? Jeśli z GNSS
-      drona, to porównanie skali vid2cloud z referencją mierzy różnicę dwóch niezależnych
-      źródeł; jeśli z tej samej łaty ArUco co chmura, to nie mierzy nic. Do ustalenia **zanim**
-      powstanie test skali.
 - [ ] **Zasięg ArUco w terenie nie jest zmierzony.** Z geometrii (4K, HFOV ~68°): marker 30 cm
       z 20 m ma ok. 43 px na pełnej klatce, ale tylko ok. 5,7 px na wejściu modelu 512 px.
       Detekcja idzie po pełnej klatce, więc wykrycie nie jest wąskim gardłem — jest nim to,
