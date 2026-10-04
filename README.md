@@ -64,6 +64,7 @@ się czyta:
 ```bash
 python -m vid2cloud.scale.aruco zdjecie.jpg --out debug.jpg     # narożniki, ID, JSON
 python -m vid2cloud.scale.aruco --video klip.mp4 --frame 120 --out debug.jpg
+python -m vid2cloud.scale.aruco --video klip.mp4 --render podglad.mp4     # film z obrysami + CSV per klatka
 ```
 
 ## Silnik
@@ -75,3 +76,16 @@ git submodule add https://github.com/rmurai0610/MASt3R-SLAM third_party/mast3r-s
 ```
 
 Uzasadnienie tego wyboru: [docs/decisions.md](docs/decisions.md).
+
+Przebieg nagrania przez silnik (env `mast3r-slam`, GPU) — adapter odtwarza pętlę `main.py`
+upstreamu z własnym dekoderem PyAV i zapisuje stan klatek kluczowych:
+
+```bash
+vid2cloud run nagranie.mp4 --out runs/<nazwa>              # single_thread: zrzuty deterministyczne
+vid2cloud run nagranie.mp4 --out runs/<nazwa> --no-single-thread   # zachowanie upstreamu
+```
+
+W `runs/<nazwa>/`: `cloud.ply`, `trajectory_sim3.txt` (pozy klatek kluczowych **ze skalą** s),
+`poses_history.csv` (pozy po każdym zdarzeniu), `keyframes/kf_NNN_{created,final}.npz`
+(pointmapa, ufność, poza), `aruco_keyframes.csv`, `log.csv` (wiersz na klatkę), `config.json`.
+Algorytm: [docs/pseudocode/engine.md](docs/pseudocode/engine.md), [run.md](docs/pseudocode/run.md).

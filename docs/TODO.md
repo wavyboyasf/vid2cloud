@@ -28,10 +28,41 @@ i czekają na swoją sesję (zasada 1 z CLAUDE.md).
       testu C (docs/decisions.md, wpis z 2026-09-13); prawdziwym rozwiązaniem byłby torchcodec albo
       własne dekodowanie przez adapter. Nie sprawdzono też, czy przy klipie VFR skopiowanym
       `-c copy` OpenCV trafia zawsze w dobrą klatkę, czy potrafi ją zdublować albo pominąć.
+      *03.10: `vid2cloud run` dekoduje PyAV sekwencyjnie (adapter). Na 125437 klatki 0 i 500 z
+      `MP4Dataset` i z `FileSource` to ta sama klatka (sąsiednie dają kilka razy większą różnicę),
+      liczby w `runs/2026-09-21/adapter/decoder_diff_125437.csv`. Klipy testu C nie były przeliczane.*
 - [ ] **Znaczniki czasu trajektorii upstreamu przesunięte o 1 klatkę** (z lektury kodu, bez weryfikacji
       przebiegiem): `get_img_shape()` (`main.py:172`) wywołuje `read_img(0)`, które dopisuje znacznik
       (`dataloader.py:264`), więc dla MP4 `timestamps[i] = (i-1)/fps` dla i ≥ 1. Dotyczy `input.txt`
       i nazw PNG keyframe'ów. Ma znaczenie przy mapowaniu keyframe'ów na czas nagrania.
+      *Adaptera nie dotyczy: `trajectory_sim3.txt` bierze PTS klatki źródła klatki kluczowej.*
+      *03.10, 125437: upstream (02.10) i adapter dały po 7 klatek kluczowych; dla każdej z 6
+      klatek k ≥ 1 `t_upstream · CAP_PROP_FPS` (30,000247) = `frame_index` adaptera − 1, co do
+      klatki (279/280, 479/480, 672/673, 846/847, 1167/1168, 1302/1303) — zgodne z tym wpisem.*
+- [ ] **Półpiksel cropu w `Intrinsics`/`resize_img(return_transformation=True)` upstreamu.** Upstream
+      liczy połowę cropu jako `(W - W_out) / 2`, a PIL tnie od `cx - halfw`; przy nieparzystym boku
+      po skalowaniu wychodzi 0,5 px różnicy (sprawdzone 03.10: 3840x1640 i 3840x1643 -> bok 219,
+      `top` 5,5 u upstreamu, 5,0 w `scale/aruco.py`). Dla 3840x2160 / 2160x3840 / 4000x3000 /
+      1920x1080 / 3840x1634 zgodne. `run.py` przelicza narożniki liczbami z silnika, czyli przy
+      takim formacie byłby o 0,5 px nie tam; test pilnuje tylko formatów z 21.09.
+- [ ] **Klatka kluczowa z relokalizacji ma N = 0** (z lektury kodu): backend dokłada
+      `states.get_frame()` (`main.py:42`), a `SharedStates.get_frame()` nie przenosi N
+      (`frame.py:169-183`), więc `get_average_conf() = C / 0` do pierwszej aktualizacji przez
+      tracker. Zrzuty `kf_*_created.npz` zapisują to, co jest w silniku. Lift (sesja B) musi
+      traktować N = 0 jawnie, a `save_reconstruction` przepuściłby wtedy całą klatkę (inf > 1,5).
+- [ ] **Ścieżka relokalizacji w adapterze nie jest sprawdzona przebiegiem.** W pięciu przebiegach
+      z 03.10 (`runs/2026-09-21/adapter/`) tracker ani razu nie zgubił śledzenia (`tracking_lost` = 0,
+      `reloc_kf` = 0), więc zrzut klatki kluczowej dokładanej przez backend (zdarzenie „reloc”) jest
+      napisany i nietknięty. Sprawdzić na pierwszym nagraniu z relokalizacją.
+- [ ] **Bez single_thread historia póz jest próbkowana co klatkę** (`poses_history.csv`, zdarzenie
+      `backend_done`): kilka optymalizacji między dwiema klatkami zlewa się w jeden wiersz, a moment
+      zapisu zależy od tempa GPU. Do rozdziału o s_k(t) brać przebiegi z `--single-thread`.
+
+## Wejście
+
+- [ ] **Rotacja z display matrix siedzi w `scale/aruco.py`**, a `input/sources.py` ją stamtąd
+      importuje (wejście zależy od modułu skali i od OpenCV). Przenieść `frame_rotation()` /
+      `apply_rotation()` do `input/`, gdy powstanie `CameraSource`.
 
 ## Skala
 
@@ -108,6 +139,8 @@ i czekają na swoją sesję (zasada 1 z CLAUDE.md).
 - [ ] **Brak `log.csv` per klatka w przebiegach testu C.** Test C uruchamia upstreamowy `main.py`
       bez hooków, więc `runs/test_c/clip_*/` mają `config.json`, `log.txt` i `cloud.ply`, ale nie
       logu per klatka z zasady 3 CLAUDE.md. Wymaga przebiegu przez adapter `engine/mast3r_slam.py`.
+      *Adapter jest od 03.10 (`vid2cloud run`); klipy testu C nie zostały przez niego przeliczone.
+      Kolumn ostrości i selekcji w `log.csv` jeszcze nie ma — przyjdą z `input/selection.py`.*
 
 - [ ] **Skany TLS sali koncertowej leżą nierozpakowane** w `data/2026-09-21/reference_lidar/`
       (9 archiwów, 8,4 GB, w środku `.e57` z 23.02.2026, np. `ZK-Koncertowa-23022026-05.e57`).

@@ -314,3 +314,65 @@ propozycji nie był ustalony przed pomiarem i nie jest używany.
 Alternatywa: kryterium jakości po rozrzucie (odrzucone — miesza zjawisko z błędem pomiaru).
 Literatura: Strasdat, Montiel, Davison 2010 (Scale drift-aware large scale monocular SLAM, RSS);
 Murai, Dexheimer, Davison 2025 (MASt3R-SLAM, CVPR) — Sim(3) i pin pierwszej klatki kluczowej.
+
+---
+
+## 2026-10-03 — Adapter MASt3R-SLAM: pętla `main.py` odtworzona u nas, backend upstreamu bez kopii
+
+**Co.** `vid2cloud/engine/mast3r_slam.py` powtarza pętlę `main.py:233-310` (INIT / TRACKING / RELOC,
+kolejka optymalizacji, czekanie przy `single_thread`), a wszystkie jej elementy importuje z upstreamu.
+Proces backendu uruchamia oryginalne `main.run_backend`: katalog upstreamu jest dopisany **na końcu**
+`sys.path`, a proces `spawn` dziedziczy `sys.path` rodzica i importuje `main` po nazwie — sprawdzone
+przed napisaniem adaptera (dziecko weszło do `run_backend`). Kopia `run_backend`/`relocalization`
+nie była potrzebna. Do pętli dochodzą wyłącznie odczyty pod `keyframes.lock`: zrzut klatki kluczowej
+przy powstaniu (nowe wykrywane po `len(keyframes)`, więc także z relokalizacji) i na końcu
+(`keyframes/kf_*_{created,final}.npz`) oraz pozy Sim(3) wszystkich klatek kluczowych po każdym
+zdarzeniu (`poses_history.csv`).
+
+**Dlaczego.** Komponenty 4 i 5 potrzebują pointmapy klatki kluczowej w chwili powstania i skali s_k
+po każdej optymalizacji, a upstream nie zapisuje pointmap, a `save_traj` gubi skalę (`as_SE3`).
+Odtworzenie pętli to mniej kodu niż łatka w `third_party/` i nie łamie zasady nietykania upstreamu.
+`single_thread` jest domyślnie włączone dla pliku: po każdej nowej klatce kluczowej pętla czeka na
+koniec optymalizacji (`main.py:301`), więc zrzuty odpowiadają zdarzeniom, a nie temu, jak szybko
+liczy GPU. `--no-single-thread` daje zachowanie upstreamu (tryb na żywo). Sprawdzone 03.10 na 125437: dwa
+przebiegi z single_thread dały bajt w bajt identyczne `cloud.ply`, `poses_history.csv` i wszystkie
+zrzuty `.npz`; przebieg bez single_thread wybrał te same klatki kluczowe, a s_k różniło się od
+pierwszego o 0 do 0,556 % (`runs/2026-09-21/adapter/powtarzalnosc_125437.csv`).
+
+**Odstępstwa od `main.py` — wokół pętli, nie w niej.** (1) `single_thread` nadpisywane flagą CLI
+(base.yaml ma False). (2) Backend startuje z cwd = katalog upstreamu, bo `load_retriever` czyta
+checkpoint ścieżką względną (`mast3r_utils.py:26`); model główny ładowany ścieżką bezwzględną.
+(3) `finalize()` dołącza backend **przed** zapisem; upstream zapisuje przed `join()`, co bez
+single_thread ściga się z ostatnią optymalizacją. (4) Bez single_thread zdarzenie „backend_done”
+jest próbkowane po każdej klatce — kilka optymalizacji między dwiema klatkami zlewa się w jedno.
+(5) Pozę klatki kluczowej z relokalizacji widać dopiero po optymalizacji wewnątrz `relocalization()`,
+stąd osobne zdarzenie „reloc” zamiast „kf_created”.
+
+**Alternatywa: łatka z hakami w `main.py`/`frame.py` albo kopia `run_backend` z dopisanymi hakami.**
+Odrzucone: pierwsza modyfikuje upstream, druga zmienia logikę skopiowanego kodu. Jedyne, czego
+w obecnym podejściu brakuje, to poza klatki z relokalizacji sprzed optymalizacji.
+
+Literatura: Murai, Dexheimer, Davison 2025 (MASt3R-SLAM, CVPR) — podział frontend/backend, graf
+klatek kluczowych, Sim(3) z pinem pierwszej klatki; sposób podpięcia — brak, decyzja inżynierska.
+
+---
+
+## 2026-10-03 — Źródło klatek: PyAV w env silnika, czas z PTS kontenera, rotacja w źródle
+
+**Co.** `vid2cloud/input/sources.py::FileSource` dekoduje PyAV sekwencyjnie (bez seeków), obraca
+klatkę wg display matrix funkcjami z `scale/aruco.py` i zwraca PTS w sekundach **bez przesuwania
+do zera** (pierwsza klatka 125437 ma 0,0243 s — tak samo jak w `podglad.csv` z `--render`).
+Do env `mast3r-slam` doinstalowano `av 18.1.0` i `pytest 9.1.1` (z nimi `pluggy 1.6.0`,
+`iniconfig 2.3.0`); `pip install --dry-run` pokazał, że torch 2.11.0+cu128 i numpy 1.26.4 zostają,
+i po instalacji to sprawdzono.
+
+**Dlaczego.** Dekoder musi siedzieć w procesie silnika, a PyAV jest jedynym dozwolonym dekoderem.
+Czas z PTS, bo `MP4Dataset` liczy `idx / fps` i zakłada stały fps. Rotacja w źródle, bo
+`cv2.VideoCapture` upstreamu stosuje ją sam (wpis z 2026-10-02) — bez tego silnik widziałby
+inny kadr niż w przebiegach z 02.10, a ArUco inny niż silnik. pytest w env silnika jest potrzebny
+tylko dla testu porównującego transformację wejścia adaptera z `scale/aruco.py`.
+
+**Alternatywa: dekodowanie w osobnym procesie w env `vid2cloud-tools`.** Odrzucone — klatka 4K RGB
+to ok. 25 MB do przesłania między procesami, a zysku nie ma, skoro `av` nie rusza torcha ani numpy.
+
+Literatura: brak — decyzja inżynierska.

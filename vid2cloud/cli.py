@@ -6,8 +6,8 @@ Cztery komendy odpowiadające etapom pracy z materiałem:
     scale   — nadanie skali metrycznej gotowej chmurze na podstawie wzorców
     eval    — porównanie wyniku z referencją i zestawienie metryk
 
-Na tym etapie każda komenda tylko wypisuje swoje argumenty i "not implemented".
-Zestawy argumentów są wstępne — doprecyzuje je sesja, która implementuje daną komendę.
+`run` działa (vid2cloud/run.py, env mast3r-slam). Pozostałe komendy na razie tylko
+wypisują swoje argumenty i "not implemented" — doprecyzuje je sesja, która je implementuje.
 """
 
 from pathlib import Path
@@ -34,11 +34,26 @@ def _not_implemented(command: str, **kwargs: object) -> None:
 def run(
     video: Annotated[Path, typer.Argument(help="Plik wideo wejściowy.")],
     out: Annotated[Path, typer.Option("--out", "-o", help="Katalog przebiegu (runs/<nazwa>).")] = Path("runs/default"),
-    config: Annotated[Optional[Path], typer.Option("--config", "-c", help="Plik konfiguracyjny silnika.")] = None,
+    config: Annotated[Optional[Path], typer.Option("--config", "-c", help="Plik konfiguracyjny silnika (domyślnie base.yaml upstreamu).")] = None,
     max_frames: Annotated[Optional[int], typer.Option("--max-frames", help="Ogranicz liczbę klatek (do testów).")] = None,
+    single_thread: Annotated[bool, typer.Option(
+        "--single-thread/--no-single-thread",
+        help="Czekaj na backend po każdej klatce kluczowej (deterministyczne zrzuty). "
+             "--no-single-thread = zachowanie upstreamu, jak na żywo.",
+    )] = True,
 ) -> None:
-    """Pełny przebieg: dekodowanie, selekcja klatek, rekonstrukcja, zapis chmury."""
-    _not_implemented("run", video=video, out=out, config=config, max_frames=max_frames)
+    """Pełny przebieg MASt3R-SLAM: chmura, zrzuty klatek kluczowych, historia póz Sim(3), log per klatka.
+
+    Uruchamiać w env `mast3r-slam`. Każda klatka idzie do silnika (selekcja klatek jeszcze nie istnieje).
+    """
+    from vid2cloud.run import run_video  # lokalnie: torch i upstream tylko dla tej komendy
+
+    record = run_video(video, out, config_path=config, single_thread=single_thread, max_frames=max_frames)
+    times, results = record["times_s"], record["results"]
+    typer.echo(
+        f"gotowe: {results['n_frames']} klatek, {results['n_keyframes']} klatek kluczowych, "
+        f"{results['n_points_cloud']} punktów, {times['wall_total']:.0f} s -> {record['out']}"
+    )
 
 
 @app.command()
