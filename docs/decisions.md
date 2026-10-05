@@ -376,3 +376,65 @@ tylko dla testu porównującego transformację wejścia adaptera z `scale/aruco.
 to ok. 25 MB do przesłania między procesami, a zysku nie ma, skoro `av` nie rusza torcha ani numpy.
 
 Literatura: brak — decyzja inżynierska.
+
+---
+
+## 2026-10-05 — Konwencja półpiksela w lifcie: środek piksela, sprawdzona na obrazie wejścia sieci
+
+**Co.** `scale/lift.py` przyjmuje konwencję z `scale/aruco.py::rescale_corners()`:
+x' = (x + 0,5)·s − 0,5 − left, a piksel pointmapy (wiersz i, kolumna j) ma środek w (x = j, y = i).
+Sprawdzone na danych (`eval/half_pixel_check.py`): ArUco wykryte bezpośrednio na obrazie wejścia
+sieci (`keyframes/kf_NNN.png`, ten sam crop co pointmapa) porównane z narożnikami z pełnej klatki
+przeliczonymi na 512 — 152 narożniki, 38 markerów, trzy przebiegi z 03.10. Konwencja środka:
+średnia różnica +0,033 px (x) / −0,023 px (y), mediana +0,012 / 0,000 px. Konwencja narożnika
+piksela (x' = x·s − left, jak `Intrinsics` upstreamu): średnia +0,467 / +0,410 px, mediana
++0,445 / +0,433 px, przy oczekiwanym przesunięciu 0,5·(1 − s) = 0,433 px. Odchylenie standardowe
+różnic jest w obu konwencjach takie samo: 0,83 px (x) i 0,40 px (y).
+
+**Czego to nie sprawdza.** Wyrównania pointmapy z obrazem piksel w piksel — pointmapa nie niesie
+wzoru markera. To przyjmujemy z konstrukcji (sieć zwraca wartość dla każdego piksela wejścia).
+
+**Wrażliwość.** Przeliczenie narożników konwencją narożnika zamiast środka zmienia d_canon 17
+odcinków (stan końcowy) o −0,42 … +0,33 % (mediana −0,024 %).
+
+**Alternatywa: konwencja narożnika piksela.** Odrzucona — powyższe różnice jej przeczą.
+Pozycja „Konwencja półpiksela” w `docs/TODO.md` zamknięta.
+
+Literatura: brak — sprawdzenie na danych.
+
+---
+
+## 2026-10-05 — Lift punktów odniesienia taśmy: płaszczyzna planszy + promień, narożniki ArUco
+
+**Co.** W `targets.json` z 21.09 żaden odcinek nie jest mierzony środek–środek: punkty odniesienia
+to narożniki („lewy-gorny”), środki krawędzi („srodek-gornej”) i krawędzie „pod kątem”. Decyzje
+autora z 05.10: (1) narożnik liftowany jako przecięcie promienia w pikselu narożnika z płaszczyzną
+planszy; płaszczyzna (SVD) i promień r = (X/Z, Y/Z), afiniczny w (x, y), dopasowane do pikseli
+wnętrza markera (czworokąt 50 % wokół przecięcia przekątnych, C/N ≥ 1,5, co najmniej 5 pikseli);
+(2) narożniki w kolejności ArUco w układzie markera: 0 lewy-górny, 1 prawy-górny, 2 prawy-dolny,
+3 lewy-dolny — potwierdzone przez autora na `runs/2026-09-21/adapter/podglad_narozniki.png`
+(daleko_wolno, kf 3, markery 3, 8, 10, 11, 12); narożnik 0 jest wizualnie lewym górnym w 40 z 40
+wykryć ID z targets.json w klatkach kluczowych; (3) środek krawędzi = środek odcinka 3D między
+jej narożnikami po lifcie, nie środek 2D na obrazie; (4) „prawa/lewa-krawedz, pod katem”
+(3-8, 10-11) = górny róg tej krawędzi, zgodnie z uwagą w `pomiary_tasma.csv` i z klikaniem
+w CloudCompare. Taśma była mierzona od narożników czarnego kwadratu, więc narożniki ArUco są
+punktami pomiaru bez przesunięcia. Środek markera (nakładka `markers_world.ply`) liczony medianą
+X w tym samym czworokącie 50 %. Nieznana nazwa punktu albo kwalifikator to błąd przed liczeniem.
+
+**Dlaczego.** Piksel narożnika leży przy 512 px ok. 3–7 px od krawędzi kartki, za którą jest tło
+oddalone o metry; płaszczyzna + promień wyznacza narożnik z wnętrza markera i brzegu nie próbkuje.
+Dla płaskiej planszy i kamery otworkowej (X/Z afiniczne w pikselach) przecięcie jest dokładne:
+`tests/test_lift.py` odtwarza odcinek na płaszczyźnie skośnej do 1e-6 (float64; dla pointmapy
+float32 błąd narożnika < 1e-5). Rozrzut (MAD) to mediana odległości pikseli wnętrza od ich
+mediany — mierzy także rozmiar plamy pikseli, nie tylko szum; obok jest RMS do płaszczyzny.
+
+**Diagnostyka bez progu.** Ta sama odległość z mediany X w oknie 3×3 przy narożniku, różnica
+`L · (d_3×3 / d − 1)`: przy powstaniu mediana −2,3 mm (|·| 5,2 mm, od −65,5 do +43,1 mm), na końcu
+mediana +0,9 mm (|·| 3,8 mm, od −5,1 do +28,7 mm), 17 odcinków.
+
+**Alternatywy.** Mediana w oknie przy narożniku — została jako kolumna diagnostyczna. Afiniczna
+ekstrapolacja X(x, y) — niedokładna przy perspektywie (plansze „pod kątem”). Tylko środek–środek
+— żaden z pięciu odcinków nie dałby wyniku.
+
+Literatura: Hartley, Zisserman 2004 (Multiple View Geometry in Computer Vision, wyd. 2) — model
+kamery otworkowej i przecięcie promienia z płaszczyzną.

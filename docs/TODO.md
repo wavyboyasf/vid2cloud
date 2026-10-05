@@ -50,6 +50,8 @@ i czekają na swoją sesję (zasada 1 z CLAUDE.md).
       (`frame.py:169-183`), więc `get_average_conf() = C / 0` do pierwszej aktualizacji przez
       tracker. Zrzuty `kf_*_created.npz` zapisują to, co jest w silniku. Lift (sesja B) musi
       traktować N = 0 jawnie, a `save_reconstruction` przepuściłby wtedy całą klatkę (inf > 1,5).
+      *05.10: `scale/lift.py::mean_confidence()` odmawia przy N = 0, a `eval/scale_per_keyframe.py`
+      zapisuje wtedy powód w kolumnie `status`; w danych z 03.10 N = 0 nie wystąpiło.*
 - [ ] **Ścieżka relokalizacji w adapterze nie jest sprawdzona przebiegiem.** W pięciu przebiegach
       z 03.10 (`runs/2026-09-21/adapter/`) tracker ani razu nie zgubił śledzenia (`tracking_lost` = 0,
       `reloc_kf` = 0), więc zrzut klatki kluczowej dokładanej przez backend (zdarzenie „reloc”) jest
@@ -66,11 +68,13 @@ i czekają na swoją sesję (zasada 1 z CLAUDE.md).
 
 ## Skala
 
-- [ ] **Konwencja półpiksela przy przeliczaniu narożników.** `scale/aruco.rescale_corners()`
+- [x] **Konwencja półpiksela przy przeliczaniu narożników.** `scale/aruco.rescale_corners()`
       liczy `x' = (x + 0.5) * W/W1 - 0.5 - left` (środki pikseli), upstream w `Intrinsics`
       (`dataloader.py:292`) pomija poprawkę — różnica ok. 0,43 px przy 4K -> 512. Przy lifcie
       sprawdzić, którą konwencję zakłada próbkowanie pointmapy, i czy różnica w ogóle wychodzi
       poza szum. Patrz `docs/decisions.md`, wpis z 2026-09-13.
+      *Zamknięte 05.10: konwencja środka potwierdzona na obrazie wejścia sieci, wpływ na d_canon
+      −0,42 … +0,33 % — `docs/decisions.md`, wpis z 2026-10-05.*
 - [ ] **`img_downsample` > 1 nie jest obsłużony.** `frame.py:117-120` przerzedza siatkę pointmapy
       o `config["dataset"]["img_downsample"]` (domyślnie 1 w `config/base.yaml:5`). `input_transform()`
       zakłada 1 i tego nie sprawdza — jeśli kiedyś zmienimy config, narożniki wylądują nie tam.
@@ -114,6 +118,9 @@ i czekają na swoją sesję (zasada 1 z CLAUDE.md).
       w podglądzie. Do rozstrzygnięcia przy lifcie, czy filtr ma zejść do detekcji i czy obok
       listy ID potrzebny jest drugi warunek (minimalny bok, ciągłość w czasie): sam bok nie
       wystarczy, bo 40 px fałszywki to więcej niż 4,32 px najmniejszego prawdziwego ID 9.
+      *05.10: lift (`eval/scale_per_keyframe.py`) bierze tylko ID z `targets.json`; detekcja i
+      `aruco_keyframes.csv` nadal zapisują wszystko. W klatkach kluczowych przebiegów z 03.10 nie
+      było żadnego ID spoza listy.*
 - [ ] **Łata skali (ID 48/49) nie była na sesji 21.09.** Nie ma jej na żadnym z 71 zdjęć
       z `photos_targets/` ani w nagraniach. Wzorcem skali dla tej sesji mogą więc być tylko
       odległości między planszami mierzone taśmą (`notes/pomiary_tasma.csv`), a te są mierzone
