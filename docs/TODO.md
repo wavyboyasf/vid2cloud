@@ -144,8 +144,8 @@ i czekają na swoją sesję (zasada 1 z CLAUDE.md).
 
 - [ ] **Skany TLS sali koncertowej leżą nierozpakowane** w `data/2026-09-21/reference_lidar/`
       (9 archiwów, 8,4 GB, w środku `.e57` z 23.02.2026, np. `ZK-Koncertowa-23022026-05.e57`).
-      To są stanowiska lidarowe pokoju jako referencja — czyli trzecie źródło prawdy terenowej
-      obok nalotu dronowego z szachownicami i rekonstrukcji COLMAP zespołu. Do ustalenia, **zanim**
+      To są stanowiska lidarowe pokoju jako referencja, obok rekonstrukcji COLMAP zespołu.
+      Do ustalenia, **zanim**
       powstanie test skali: które z tych źródeł jest referencją dla czego i skąd każde z nich bierze
       skalę metryczną. Rozpakowanie i przegląd — osobna sesja.
 - [ ] **Rekonstrukcje COLMAP zespołu** (`data/2026-09-21/reference_colmap/`, 190 plików): nie wiadomo,
