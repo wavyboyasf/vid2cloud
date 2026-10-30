@@ -13,6 +13,17 @@ i czekają na swoją sesję (zasada 1 z CLAUDE.md).
 - [ ] **Nagrania testowe** — `VID20263_cut.mp4` i reszta `datasets/own/` są w tym samym vhdx.
       Wyciągnąć przed testem C.
 
+- [ ] **GUI CloudCompare (flatpak) prawdopodobnie się nie uruchomi** — runtime GL flatpaka to
+      `nvidia-595-84`, sterownik hosta 595.91.07; tryb wsadowy z 30.10 kończył się „Could not
+      initialize GLX” (kod 134), dopóki nie przeszedł na Qt offscreen (`eval/cc.sh`). Samego GUI
+      nie uruchamiano. Pasujący runtime jest na flathubie:
+      `flatpak install flathub org.freedesktop.Platform.GL.nvidia-595-91-07` (nie zmienia wersji CC).
+      Doraźnie: `flatpak run --env=__GLX_VENDOR_LIBRARY_NAME=mesa --env=LIBGL_ALWAYS_SOFTWARE=1
+      org.cloudcompare.CloudCompare` (renderowanie programowe; przy tym GLX przestał być błędem).
+      Uruchamiany z terminala z aktywną condą CC wisi na oknie wtyczki Python — `conda deactivate` przed.
+- [ ] **Nie aktualizować flatpaka CloudCompare do końca ocen** — na flathubie jest nowsza kompilacja
+      (runtime KDE 6.11), zainstalowana 2.13.2. `flatpak mask org.cloudcompare.CloudCompare` blokuje update.
+
 ## Silnik
 
 - [ ] **Poprawki sm_120 poza submodule.** Patrz `docs/decisions.md` (wpis z 2026-09-09):
@@ -169,6 +180,22 @@ i czekają na swoją sesję (zasada 1 z CLAUDE.md).
       Do ustalenia, **zanim**
       powstanie test skali: które z tych źródeł jest referencją dla czego i skąd każde z nich bierze
       skalę metryczną. Rozpakowanie i przegląd — osobna sesja.
+      *30.10: 6 skanów sali koncertowej wypakowanych do `reference_lidar/koncertowa/`, scalonych
+      i podpróbkowanych do 1 cm (`runs/2026-09-21/eval_cc/tls/`); TLS jest referencją kształtu
+      w `eval/eval_cloud.py`. Otwarte zostaje: skąd TLS ma skalę (rejestracja Cyclone REGISTER 360,
+      skaner Leica — z metadanych E57 nie wynika nic więcej) i rola rekonstrukcji COLMAP.*
+- [ ] **Ręczne kroki przed oceną kształtu** (`docs/instrukcja_cloudcompare.md`): TLS bez elementów
+      ruchomych (`tls_koncertowa_1cm_static.ply`), pary punktów i macierze zgrubne dla trzech nagrań.
+      Potem `bash eval/eval_all.sh` (30.10 tylko `--dry-run`: 20 chmur, wszystkie bez macierzy).
+- [ ] **Wymiary Sali Tronowej z TLS obejmują pomieszczenia sąsiednie** widziane przez drzwi
+      (`runs/2026-09-21/eval_cc/tls/tls_tronowa_1cm_dims_top.png`) — prostopadłościan i percentyle
+      1–99 to nie są wymiary sali. Gdyby były potrzebne: wyciąć salę ręcznie.
+- [ ] **`eval/cloudcompare_batch.sh` i `eval/test_e_distance.py` to puste zaślepki** z początku
+      projektu; ich rolę przejęły `eval/eval_cloud.py` + `eval/eval_all.sh` i `eval/test_e.py`.
+      Usunąć albo zostawić z odsyłaczem — decyzja autora.
+- [ ] **Krok 6 (VID_ODLEGLOSC, bok znacznika): rozrzut czterech boków ID 8 > 5 %** — kf 0: 5,74 %,
+      kf 1: 6,97 % (`runs/odleglosc/adapter/marker_side_scale.csv`). Pozostałe 6 wierszy 0,73–2,85 %.
+      Nie interpretowano.
 - [ ] **Rekonstrukcje COLMAP zespołu** (`data/2026-09-21/reference_colmap/`, 190 plików): nie wiadomo,
       czy mają skalę metryczną i z czego. Jeśli z tych samych plansz ArUco co nasza chmura, to
       porównanie z nimi nie mierzy skali, tylko zgodność dwóch rekonstrukcji.

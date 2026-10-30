@@ -488,3 +488,92 @@ Pattern Recognition 46) — porównanie rodzin operatorów ostrości; Sieberth, 
 (Automatic detection of blurred images in UAV image sets, ISPRS J. Photogramm. Remote Sens. 122) —
 wykrywanie rozmytych zdjęć w fotogrametrii; Torresani, Remondino 2019 (Videogrammetry vs
 photogrammetry for heritage 3D reconstruction, ISPRS Archives XLII-2/W15) — dobór klatek z wideo.
+
+---
+
+## 2026-10-30 — Ocena kształtu chmur względem TLS: CloudCompare wsadowo, parametry ustalone przed wynikami
+
+**Co.** Każda chmura rekonstrukcji jest oceniana względem skanu TLS sali koncertowej jedną
+procedurą (`eval/eval_cloud.py`, wszystkie chmury `eval/eval_all.sh`, pseudokod
+`docs/pseudocode/eval.md`): macierz zgrubna z par punktów (Umeyama, `eval/coarse_from_pairs.py`)
+→ wycięcie prostopadłościanem → SOR → ICP ze skalą → C2C → statystyki w numpy. Parametry,
+zapisane w `eval/eval_config.json` 30.10 **przed** jakimkolwiek wynikiem i pilnowane testem:
+TLS podpróbkowany przestrzennie do 0,01 m; SOR k = 6, σ = 1,0 (domyślne CloudCompare); ICP
+`-ADJUST_SCALE`, `-MIN_ERROR_DIFF 1e-6`, `-RANDOM_SAMPLING_LIMIT 50000`, `-OVERLAP 90`; progi
+0,05 / 0,10 / 0,20 m; prostopadłościan = percentyle 1–99 współrzędnych chmury po dopasowaniu
+zgrubnym, osobno X, Y, Z, plus 0,20 m. C2C liczone **od rekonstrukcji (compared) do TLS
+(reference)**, bez modelu lokalnego. **Jedna macierz zgrubna i jeden prostopadłościan na
+nagranie** — liczone z `runs/2026-09-21/adapter/<nagranie>/cloud.ply` i używane dla wszystkich
+wariantów (adapter, powtórzenia, selekcja); tym samym prostopadłościanem wycinany jest TLS.
+Kontrola skali: s_mod = mediana factor_final przebiegu, porównana z s_icp = ∛det((M_icp·M_c)[:3,:3]),
+oraz RMS C2C chmury przeskalowanej przez s_mod i dopasowanej sztywnie.
+
+**Dlaczego.** Kierunek rekonstrukcja → TLS, bo TLS pokrywa całą salę, a rekonstrukcja jej
+fragment: odwrotny kierunek mierzyłby głównie brak pokrycia. Bez modelu lokalnego, bo przy
+TLS 1 cm odległość do najbliższego punktu różni się od odległości do powierzchni o ułamek kroku
+(na syntetyce z siatką 5 mm: RMS C2C 10,2 mm przy szumie 10 mm), a wynik nie zależy od wyboru
+modelu i jego promienia. Jeden prostopadłościan i jedna macierz na nagranie, bo inaczej różnice
+między wariantami selekcji mieszałyby się z różnicą wycinka i z rozrzutem ręcznego klikania;
+warianty zaczynają się od tej samej lub sąsiedniej klatki, więc mają prawie ten sam układ
+(kotwica = pierwsza klatka kluczowa), a resztę zbiera ICP. ICP ze skalą, bo chmura monokularna
+nie ma skali metrycznej, a pytanie oceny to kształt; skala z taśmy jest osobną gałęzią (g), żeby
+dało się porównać kształt „najlepiej dopasowany” z kształtem w skali, którą daje moduł skali.
+Parametry ustalone przed wynikami z tego samego powodu co progi selekcji (wpis z 2026-10-28):
+dobrane po wyniku byłyby dopasowaniem do danych.
+
+**Podział pracy CloudCompare / numpy.** CloudCompare liczy SOR, ICP i C2C (to są algorytmy,
+na które powołuje się tekst pracy); macierz zgrubna, prostopadłościan i wycięcie są w numpy
+(deterministyczne, z testem), a do CC trafiają gotowe pliki PLY. Komendy każdej chmury są
+w `<out>/cc_commands.txt`. Alternatywa — `-APPLY_TRANS` i `-CROP` w CC — dałaby to samo,
+ale `-CROP` działa na wszystkie wczytane chmury naraz, więc kolejność komend musiałaby to
+obchodzić.
+
+**CloudCompare w trybie wiersza poleceń.** Flatpak `org.cloudcompare.CloudCompare` **2.13.2**
+(metainfo: wydanie 2024-07-11; commit flatpaka fd2774230ee4…, runtime org.kde.Platform 5.15-24.08).
+Nagłówek PLY zapisanego przez CC podaje „CloudCompare v2.14.alpha (Nov 11 2011)” — to napis
+z biblioteki I/O, wersję bierzemy z metadanych flatpaka. Na flathubie jest już nowsza kompilacja
+(runtime KDE 6.11): `flatpak update` zmieniłby wersję między przebiegami — do końca ocen nie
+aktualizować (albo `flatpak mask org.cloudcompare.CloudCompare`). Uruchomienie przez
+`eval/cc.sh` wymaga dwóch zabiegów, które nie zmieniają obliczeń: (1) Qt `offscreen` bez X11 —
+flatpak ma runtime GL `nvidia-595-84`, host sterownik 595.91.07, więc GLX w piaskownicy nie
+działa i CC kończy się kodem 134 („Could not initialize GLX”); (2) bez zmiennych condy —
+wtyczka PythonRuntime bierze `CONDA_PREFIX` za swoje środowisko i pokazuje QMessageBox, na
+którym `-SILENT` wisi bez końca (ustalone z logu Qt: okno pojawia się zaraz po załadowaniu
+`libPythonRuntime.so`). Wszystkie przełączniki z promptu są w tej wersji; żadnego nie zastąpiono.
+RMS wypisywany przez `-ICP` nie jest RMS-em z pola C2C (syntetyka: 0,0192 wobec 0,0102 m) —
+zapisujemy oba, osobno nazwane.
+
+**TLS sali koncertowej** (`eval/tls_reference.py`). 9 archiwów, 25 plików .e57 (Koncertowa 6,
+Tronowa 4, Senacka 15; `eval_cc/tls_inventory.csv`). Sala koncertowa: 6 stanowisk (jeden skan
+na plik, Leica, projekt Cyclone REGISTER 360, stanowisko 01 w początku układu), 236 068 044
+punktów (suma `recordCount` = liczba wczytana przez CC), po `-MERGE_CLOUDS -SS SPATIAL 0.01`
+9 744 033 punkty z RGB i intensywnością. Prostopadłościan otaczający w osiach TLS:
+28,871 × 40,215 × 11,896 m (X × Y × Z); percentyle 1–99: 21,318 × 20,516 × 10,052 m. Widok
+z góry (`tls_koncertowa_1cm_top.png`): sala jest obrócona względem osi X TLS, a przez okna
+i drzwi skaner sięga daleko poza nią — dlatego obok jest dodatek: osie obrócone o 31,5° wokół Z
+(kąt minimalizujący pole prostokąta percentyli 1–99 w XY), percentyle 1–99:
+19,438 × 14,279 × 10,051 m. Sala Tronowa (tylko wymiary; pliki wypakowane tymczasowo i usunięte):
+4 stanowiska, 146 614 282 punkty, po 1 cm 7 184 163; prostopadłościan 46,655 × 67,034 × 12,207 m,
+percentyle 1–99: 28,688 × 35,168 × 6,484 m — według widoku z góry obie liczby obejmują
+pomieszczenia sąsiednie widziane przez drzwi, więc nie są wymiarami sali.
+
+**Test E — głębokość odcinka.** `eval/scale_per_keyframe.py` zapisuje z_a_canon, z_b_canon,
+z_mid_canon (stan przy powstaniu kf — te same punkty, z których liczony jest factor_net_created)
+i z_mid_m = z_mid_canon · mediana factor_net_created **wszystkich** odcinków przebiegu, a nie
+współczynnikiem tej samej pary — inaczej z_mid_m i net_cr byłyby zależne z definicji.
+Pozostałe kolumny i pliki przeliczenia trzech przebiegów z 03.10 są bajt w bajt takie jak przed
+zmianą. Spearman liczony w numpy (rangi średnie przy remisach; scipy nie ma w env).
+
+**Alternatywy.** (1) M3C2 zamiast C2C — mniej wrażliwe na gęstość, ale wymaga normalnych
+i skali projekcji, czyli kolejnych parametrów; C2C jest punktem odniesienia, M3C2 można dodać
+obok. (2) Open3D zamiast CloudCompare — odrzucone bez decyzji autora (tekst pracy mówi
+o CloudCompare; open3d nie ma też w żadnym env). (3) Prostopadłościan per wariant — odrzucone
+(wyżej). (4) Dopasowanie bez macierzy zgrubnej (samo ICP z identyczności) — układy
+rekonstrukcji i TLS różnią się dowolnym obrotem i skalą ok. 1,5, ICP by nie zbiegł.
+
+Literatura: Lague, Brodu, Leroux 2013 (Accurate 3D comparison of complex topography with
+terrestrial laser scanner: application to the Rangitikei canyon (N-Z), ISPRS J. Photogramm.
+Remote Sens. 82) — M3C2, punkt odniesienia dla C2C; McNally i in. 2026 — ICP ze skalą dla
+rekonstrukcji obrazowych, stała skala dla lidaru; Umeyama 1991 (Least-squares estimation of
+transformation parameters between two point patterns, IEEE TPAMI 13(4)) — przekształcenie
+przez podobieństwo z par punktów.

@@ -1,0 +1,35 @@
+{
+  "_opis": "Ocena kształtu chmur względem TLS. Parametry ustalone 2026-10-30 PRZED jakimkolwiek wynikiem (prompt sesji, docs/decisions.md wpis 2026-10-30). Nie zmieniać.",
+  "ustalone": "2026-10-30",
+  "tls_subsample_m": 0.01,
+  "sor_knn": 6,
+  "sor_sigma": 1.0,
+  "icp": {
+    "adjust_scale": true,
+    "min_error_diff": 1e-6,
+    "random_sampling_limit": 50000,
+    "final_overlap_pct": 90
+  },
+  "c2c": {
+    "compared": "rekonstrukcja",
+    "reference": "TLS",
+    "local_model": "brak"
+  },
+  "thresholds_m": [0.05, 0.10, 0.20],
+  "crop_margin_m": 0.20,
+  "crop_percentiles": [1, 99],
+  "cloudcompare": {
+    "version": "2.13.2",
+    "install": "flatpak org.cloudcompare.CloudCompare, gałąź stable (flathub), commit fd2774230ee4d24b685e01615874daee20210ce16ca91b59d7726cb1f95190fd, runtime org.kde.Platform 5.15-24.08",
+    "wrapper": "eval/cc.sh",
+    "wrapper_command": "env -u CONDA_* -u VIRTUAL_ENV -u PYTHONHOME -u PYTHONPATH flatpak run --nosocket=x11 --nosocket=fallback-x11 --env=DISPLAY= --env=QT_QPA_PLATFORM=offscreen org.cloudcompare.CloudCompare -SILENT <argumenty>",
+    "switches": {
+      "tls": "-AUTO_SAVE OFF -NO_TIMESTAMP -C_EXPORT_FMT PLY -PLY_EXPORT_FMT BINARY_LE -O <skan_1.e57> ... -O <skan_n.e57> -MERGE_CLOUDS -SS SPATIAL 0.01 -SAVE_CLOUDS FILE <tls_koncertowa_1cm.ply>",
+      "sor": "-SOR 6 1",
+      "icp_scale": "-ICP -MIN_ERROR_DIFF 1e-06 -RANDOM_SAMPLING_LIMIT 50000 -OVERLAP 90 -ADJUST_SCALE",
+      "icp_rigid": "-ICP -MIN_ERROR_DIFF 1e-06 -RANDOM_SAMPLING_LIMIT 50000 -OVERLAP 90",
+      "c2c": "-C2C_DIST",
+      "uwagi": "Kolejność wczytania: rekonstrukcja (data / compared) pierwsza, TLS (model / reference) druga — tak -ICP i -C2C_DIST traktują chmury bez -REFERENCE_IS_FIRST. Pełne komendy każdego przebiegu: <out>/cc_commands.txt."
+    }
+  }
+}

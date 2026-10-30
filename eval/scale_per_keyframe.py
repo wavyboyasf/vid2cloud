@@ -14,6 +14,13 @@ na jednostkę chmury (jak `scale_summary.csv` i `scale/estimate.py`), L = length
 Diagnostyka: d z mediany w oknie 3×3 zamiast płaszczyzny + promienia i różnica
 `diff_win3_mm = L_mm · (d_win3 / d − 1)` — bez progu.
 
+Głębokość odcinka (test E): z_a_canon, z_b_canon — współrzędna z końców odcinka w układzie
+kamery klatki k (jednostki sieci), z_mid_canon — z środka odcinka; wszystkie ze stanu przy
+powstaniu, czyli z tych samych punktów co d_canon_created i factor_net_created. Na metry:
+z_mid_m = z_mid_canon · mediana(factor_net_created) WSZYSTKICH odcinków przebiegu
+(kolumna net_cr_median_run) — nie współczynnikiem tej samej pary, bo wtedy z_mid_m i
+factor_net_created byłyby zależne z definicji.
+
 Wyjście w każdym katalogu przebiegu: scale_per_keyframe.csv, s_history.csv,
 fig_a_factor_online_final.png, fig_b_s_history.png, fig_c_factor_net_final.png,
 markers_world.ply (środki markerów w świecie, T_WC_final · X, kolor = kf). Obok katalogów
@@ -66,6 +73,7 @@ COLUMNS = (
     "plane_rms_a_final", "plane_rms_b_final",
     "d_win3_created", "d_win3_final", "diff_win3_mm_created", "diff_win3_mm_final",
     "status",
+    "z_a_canon", "z_b_canon", "z_mid_canon", "net_cr_median_run", "z_mid_m",
 )
 S_HISTORY_COLUMNS = ("event_id", "event", "frame_index", "pts_s", "n_kf", "kf", "s")
 
@@ -179,6 +187,9 @@ def segment_rows(run: Run, segments: list[Segment], refs: dict[str, tuple[Refere
                     continue
                 d = float(np.linalg.norm(la.point - lb.point))
                 row[f"d_canon_{st}"] = d
+                if st == "created":  # głębokość z tych samych punktów co factor_net_created
+                    row.update({"z_a_canon": float(la.point[2]), "z_b_canon": float(lb.point[2]),
+                                "z_mid_canon": float((la.point[2] + lb.point[2]) / 2)})
                 if la.point_win3 is not None and lb.point_win3 is not None:
                     d_win = float(np.linalg.norm(la.point_win3 - lb.point_win3))
                     row[f"d_win3_{st}"] = d_win
@@ -191,6 +202,17 @@ def segment_rows(run: Run, segments: list[Segment], refs: dict[str, tuple[Refere
                 row["factor_final"] = L / (s["final"] * row["d_canon_final"])
             row["status"] = "ok" if not reasons else " | ".join(reasons)
             rows.append(row)
+    return add_depth_m(rows)
+
+
+def add_depth_m(rows: list[dict]) -> list[dict]:
+    """z_mid_m = z_mid_canon · mediana factor_net_created wszystkich wierszy przebiegu (nie tej pary)."""
+    net = [r["factor_net_created"] for r in rows if r.get("factor_net_created") is not None]
+    med = float(np.median(net)) if net else None
+    for r in rows:
+        r["net_cr_median_run"] = med
+        if med is not None and r.get("z_mid_canon") is not None:
+            r["z_mid_m"] = r["z_mid_canon"] * med
     return rows
 
 
