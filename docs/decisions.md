@@ -438,3 +438,53 @@ ekstrapolacja X(x, y) — niedokładna przy perspektywie (plansze „pod kątem�
 
 Literatura: Hartley, Zisserman 2004 (Multiple View Geometry in Computer Vision, wyd. 2) — model
 kamery otworkowej i przecięcie promienia z płaszczyzną.
+
+---
+
+## 2026-10-28 — Selekcja klatek: miary na obrazie wejścia sieci, progi względne ustalone przed przebiegami
+
+**Co.** `vid2cloud/input/selection.py` liczy miary jakości klatki na tym obrazie, który widzi
+sieć: klatka po rotacji z metadanych (`FileSource`), przeskalowana jak `resize_img()` upstreamu
+(dłuższy bok do 512 px, filtr Lanczosa z PIL, crop centralny do wielokrotności 16 px), w skali
+szarości. Geometrię daje istniejąca `scale/aruco.input_transform()`; dopisany jest tylko resampling
+pikseli tym samym filtrem co upstream (`model_input_rgb()`). Zgodność z `resize_img()` upstreamu
+sprawdza test w env `mast3r-slam` — bajt w bajt dla 5 formatów, w tym 3840×1634 z niezerowym cropem.
+Dwie miary ostrości: **Tenengrad** (średnia Gx² + Gy², Sobel 3×3, float32) jako główna i **wariancja
+Laplasjanu** (`cv2.Laplacian`, ksize=3 — w OpenCV to jądro [[2, 0, 2], [0, −8, 0], [2, 0, 2]],
+klasyczne jądro 4-sąsiedztwa to ksize=1) do porównania; w raporcie przebiegu wstępnego jest ich
+korelacja Spearmana. Progi odrzucające, ustalone dziś **przed** jakimkolwiek przebiegiem z selekcją:
+klatka odpada, gdy Tenengrad < 0,5 × mediana Tenengradu klatek z |Δt| ≤ 2 s (okno w czasie z PTS),
+albo gdy mediana jasności jest poza [40, 220]. Dobór: w każdym oknie k kolejnych klatek argmax
+Tenengradu spośród klatek dopuszczonych; okno bez dopuszczonej klatki jest **pomijane** i trafia
+do raportu z powodem. Okien jest ⌈n/k⌉, czyli tyle, ile klatek ma stały krok od przesunięcia 0.
+`vid2cloud run --frames <lista>` dekoduje wszystkie klatki po kolei i pomija niewybrane **po**
+dekodowaniu (bez seeka); bez `--frames` wyniki są identyczne jak przed zmianą (sprawdzone na 10 s
+z 125357: 10/10 plików wynikowych, w tym `cloud.ply`, bajt w bajt, log.csv poza kolumnami
+czasowymi i klucze config.json bez zmian).
+
+**Dlaczego.** Miary na pełnym 4K oceniałyby szczegół, którego sieć nie dostaje — rozmycie 2 px
+w 4K to ok. 0,27 px przy 512 — więc ranking klatek mógłby rozjechać się z tym, co ma znaczenie dla
+silnika. Dwie miary z różnych rodzin operatorów (gradientowa i laplasjanowa), żeby wynik porównania
+nie był artefaktem jednej z nich. Próg względny w oknie czasowym, a nie bezwzględny, bo poziom
+Tenengradu zależy od treści kadru (tekstura, odległość), a nie tylko od rozmycia; okno z PTS, a nie
+z liczby klatek, bo zapis telefonu bywa nierówny. Progi ustalone przed przebiegiem, bo dobrane po
+wyniku byłyby dopasowaniem do danych (CLAUDE.md, zasada 4); test pilnuje wartości domyślnych.
+Okno puste jest pomijane, bo wymuszony wybór wpuściłby klatkę, którą kryterium właśnie uznało za
+złą — ceną jest to, że lista z progami może być krótsza od stałego kroku, a różnica jest jawna
+w `manifest.csv`. Ta sama liczba klatek co stały krok, bo inaczej porównanie mierzyłoby gęstość
+próbkowania, a nie jakość wyboru; szumem odniesienia jest rozrzut między przesunięciami stałego
+kroku (offset 0, 1, …, k−1), bo powtórzenie przebiegu z single_thread daje bajt w bajt to samo.
+
+**Alternatywy.** (1) Miary na pełnej rozdzielczości — odrzucone (wyżej). (2) `cv2.resize` z
+`INTER_AREA` zamiast PIL — prostsze, ale to nie jest obraz, który widzi sieć; PIL nie jest na liście
+zależności z CLAUDE.md, ale już jest w repo (`tools/make_boards.py`, `tests/test_aruco.py`), siedzi
+w obu env jako zależność matplotlib i tylko nim da się odtworzyć wejście sieci bajt w bajt.
+(3) Wymuszenie wyboru w pustym oknie (najlepsza z odrzuconych) — odrzucone (wyżej). (4) Próg
+bezwzględny albo percentyl z całego nagrania — odrzucone: jeden fragment z bogatą teksturą
+podnosiłby próg dla całej reszty.
+
+Literatura: Pertuz, Puig, Garcia 2013 (Analysis of focus measure operators for shape-from-focus,
+Pattern Recognition 46) — porównanie rodzin operatorów ostrości; Sieberth, Wackrow, Chandler 2016
+(Automatic detection of blurred images in UAV image sets, ISPRS J. Photogramm. Remote Sens. 122) —
+wykrywanie rozmytych zdjęć w fotogrametrii; Torresani, Remondino 2019 (Videogrammetry vs
+photogrammetry for heritage 3D reconstruction, ISPRS Archives XLII-2/W15) — dobór klatek z wideo.

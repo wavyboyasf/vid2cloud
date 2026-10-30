@@ -5,10 +5,16 @@ silnik nie importuje scale/, scale/ nie importuje engine/.
 
 Pliki w katalogu przebiegu (`--out`):
     config.json           — źródło (ffprobe), commit upstreamu, sha256 configu, czasy całkowite
-    log.csv               — wiersz na każdą klatkę (export/framelog.py)
+    log.csv               — wiersz na każdą zdekodowaną klatkę (export/framelog.py);
+                            przy --frames dodatkowa kolumna fed (0/1)
     aruco_keyframes.csv   — markery na pełnej klatce każdej nowej klatki kluczowej,
                             narożniki w pełnej rozdzielczości i przeliczone na wejście modelu
     poses_history.csv, trajectory_sim3.txt, cloud.ply, keyframes/  — z silnika
+
+Lista klatek (`frames`, `vid2cloud run --frames`): FileSource dalej dekoduje wszystkie klatki
+po kolei, bez seeka, a do silnika trafiają tylko indeksy z listy — reszta jest pomijana PO
+dekodowaniu. Silnik startuje na pierwszej klatce z listy. Bez listy przebieg jest taki sam
+jak przed wprowadzeniem tej opcji (te same kolumny log.csv i klucze config.json).
 
 Narożniki przeliczamy transformacją podaną przez silnik (`engine.input_transform()`,
 liczoną z `resize_img()` upstreamu) w konwencji środka piksela z `scale/aruco.py`.
@@ -32,7 +38,8 @@ from typing import Optional
 import cv2
 import numpy as np
 
-from vid2cloud.export.framelog import FrameLogWriter, depth_stats
+from vid2cloud.export.framelog import FRAME_LOG_COLUMNS, FRAME_LOG_COLUMNS_FED, FrameLogWriter, depth_stats
+from vid2cloud.input.selection import parse_frame_list
 from vid2cloud.input.sources import FileSource
 from vid2cloud.scale import aruco
 
@@ -137,8 +144,13 @@ def run_video(
     single_thread: bool = True,
     max_frames: Optional[int] = None,
     progress_every: int = 100,
+    frames: Optional[Path] = None,
 ) -> dict:
-    """Pełny przebieg nagrania przez MASt3R-SLAM. Zwraca słownik zapisany jako config.json."""
+    """Pełny przebieg nagrania przez MASt3R-SLAM. Zwraca słownik zapisany jako config.json.
+
+    `frames` — plik listy klatek (`selection.parse_frame_list`); do silnika idą tylko te
+    indeksy. `max_frames` ogranicza liczbę klatek zdekodowanych, nie podanych do silnika.
+    """
     t_start = time.perf_counter()
     started_at = datetime.now().astimezone().isoformat(timespec="seconds")
     video = Path(video).resolve()
@@ -146,6 +158,11 @@ def run_video(
     for name in ("log.csv", "cloud.ply", "config.json"):
         if (out / name).exists():
             raise FileExistsError(f"{out / name} już istnieje — nie nadpisuję wyników przebiegu")
+    feed: Optional[set[int]] = None
+    if frames is not None:
+        frames = Path(frames).resolve()
+        frame_list = parse_frame_list(frames.read_text(encoding="utf-8"))  # błąd listy przed startem silnika
+        feed = set(frame_list)
     out.mkdir(parents=True, exist_ok=True)
 
     # Ciężki import (torch, upstream) dopiero tutaj — `vid2cloud --help` ma działać bez GPU.
@@ -178,13 +195,15 @@ def run_video(
             "gpu": m3.torch.cuda.get_device_name(0) if m3.torch.cuda.is_available() else None,
         },
         "max_frames": max_frames,
+        **({"frames": {"path": str(frames), "sha256": _sha256(frames), "n_frames": len(frame_list)}}
+           if feed is not None else {}),
         "low_conf_threshold": LOW_CONF_THRESHOLD,
         "status": "running",
     }
     _write_json(out / "config.json", record)  # nadpisywany na końcu; przerwany przebieg też go ma
 
     source = FileSource(video)
-    log = FrameLogWriter(out / "log.csv")
+    log = FrameLogWriter(out / "log.csv", FRAME_LOG_COLUMNS if feed is None else FRAME_LOG_COLUMNS_FED)
     f_aruco = open(out / "aruco_keyframes.csv", "w", newline="", encoding="utf-8")
     w_aruco = csv.writer(f_aruco)
     w_aruco.writerow(ARUCO_COLUMNS)
@@ -192,7 +211,7 @@ def run_video(
     cache: OrderedDict[int, np.ndarray] = OrderedDict()
     tf_aruco: Optional[aruco.InputTransform] = None
     t_decode = t_engine = t_aruco = 0.0
-    n_frames = 0
+    n_frames = n_fed = n_kf = 0
     pts_first = pts_last = None
     missing_full_frames: list[int] = []
     t_loop = time.perf_counter()
@@ -205,64 +224,76 @@ def run_video(
         except StopIteration:
             break
         dt_decode = time.perf_counter() - t0
+        fed = feed is None or index in feed
 
-        if tf_aruco is None:
-            h, w = rgb.shape[:2]
-            tf_engine = engine.input_transform(h, w)
-            tf_aruco = aruco.InputTransform(**asdict(tf_engine))
-            record["input_transform"] = asdict(tf_engine) | {"full_shape": [h, w]}
-            engine.start(h, w)
-            t_loop = time.perf_counter()
+        if fed:
+            if tf_aruco is None:
+                h, w = rgb.shape[:2]
+                tf_engine = engine.input_transform(h, w)
+                tf_aruco = aruco.InputTransform(**asdict(tf_engine))
+                record["input_transform"] = asdict(tf_engine) | {"full_shape": [h, w]}
+                engine.start(h, w)
+                t_loop = time.perf_counter()
 
-        t1 = time.perf_counter()
-        res = engine.push_frame(rgb, index, pts_s)
-        dt_engine = time.perf_counter() - t1
+            t1 = time.perf_counter()
+            res = engine.push_frame(rgb, index, pts_s)
+            dt_engine = time.perf_counter() - t1
 
-        cache[index] = rgb
-        while len(cache) > FULL_FRAME_CACHE:
-            cache.popitem(last=False)
-        t2 = time.perf_counter()
-        for kf, frame_index in res.new_keyframes:
-            full = cache.get(frame_index)
-            if full is None:
-                missing_full_frames.append(frame_index)
-                w_aruco.writerow([kf, frame_index, "", *([""] * 17), "pełna klatka poza buforem"])
-                continue
-            w_aruco.writerows(aruco_rows(kf, frame_index, full, tf_aruco))
-        if res.new_keyframes:
-            f_aruco.flush()
-        t_aruco += time.perf_counter() - t2
+            cache[index] = rgb
+            while len(cache) > FULL_FRAME_CACHE:
+                cache.popitem(last=False)
+            t2 = time.perf_counter()
+            for kf, frame_index in res.new_keyframes:
+                full = cache.get(frame_index)
+                if full is None:
+                    missing_full_frames.append(frame_index)
+                    w_aruco.writerow([kf, frame_index, "", *([""] * 17), "pełna klatka poza buforem"])
+                    continue
+                w_aruco.writerows(aruco_rows(kf, frame_index, full, tf_aruco))
+            if res.new_keyframes:
+                f_aruco.flush()
+            t_aruco += time.perf_counter() - t2
 
-        median, p95, low = depth_stats(res.pointmap, res.conf, LOW_CONF_THRESHOLD)
-        log.write({
-            "index": index,
-            "pts_s": f"{pts_s:.6f}",
-            "t_decode_ms": 1000.0 * dt_decode,
-            "t_engine_ms": 1000.0 * dt_engine,
-            "t_backend_wait_ms": res.t_backend_wait_ms,
-            "is_kf": res.is_keyframe,
-            "kf_index": res.kf_index,
-            "mode": res.mode,
-            "n_kf": res.n_kf,
-            "depth_median": median,
-            "depth_p95": p95,
-            "low_conf_frac": low,
-        })
+            median, p95, low = depth_stats(res.pointmap, res.conf, LOW_CONF_THRESHOLD)
+            row = {
+                "index": index,
+                "pts_s": f"{pts_s:.6f}",
+                "t_decode_ms": 1000.0 * dt_decode,
+                "t_engine_ms": 1000.0 * dt_engine,
+                "t_backend_wait_ms": res.t_backend_wait_ms,
+                "is_kf": res.is_keyframe,
+                "kf_index": res.kf_index,
+                "mode": res.mode,
+                "n_kf": res.n_kf,
+                "depth_median": median,
+                "depth_p95": p95,
+                "low_conf_frac": low,
+            }
+            t_engine += dt_engine
+            n_fed += 1
+            n_kf = res.n_kf
+        else:  # pominięta po dekodowaniu: tylko indeks, PTS i czas dekodowania
+            row = {"index": index, "pts_s": f"{pts_s:.6f}", "t_decode_ms": 1000.0 * dt_decode}
+        if feed is not None:
+            row["fed"] = fed
+        log.write(row)
 
         t_decode += dt_decode
-        t_engine += dt_engine
         n_frames += 1
         pts_first = pts_s if pts_first is None else pts_first
         pts_last = pts_s
         if progress_every and n_frames % progress_every == 0:
             elapsed = time.perf_counter() - t_loop
-            print(f"  klatka {n_frames}/{probe.get('nb_read_frames', '?')}  kf={res.n_kf}  "
+            fed_info = "" if feed is None else f"  podanych {n_fed}"
+            print(f"  klatka {n_frames}/{probe.get('nb_read_frames', '?')}{fed_info}  kf={n_kf}  "
                   f"{n_frames / elapsed:.2f} kl/s", flush=True)
 
     log.close()
     f_aruco.close()
     if n_frames == 0:
         raise ValueError(f"{video}: nie zdekodowano żadnej klatki")
+    if n_fed == 0:  # tylko przy liście: silnik nie wystartował, nie ma czego kończyć
+        raise ValueError(f"{video}: żadna klatka z listy {frames} nie została zdekodowana")
 
     paths = engine.finalize()
     wall = time.perf_counter() - t_start
@@ -291,11 +322,18 @@ def run_video(
             "poses_history_events": engine.history.n_events,
             "missing_full_frames_for_aruco": missing_full_frames,
             **engine.counts,
+            **({"n_frames_fed": n_fed} if feed is not None else {}),
         },
         "files": {k: str(v) for k, v in paths.items()} | {
             "log": str(out / "log.csv"),
             "aruco_keyframes": str(out / "aruco_keyframes.csv"),
         },
     })
+    if feed is not None:
+        # Indeksy z listy, których nie było w nagraniu (albo za --max-frames) — zapisane, nie poprawiane.
+        not_decoded = sorted(i for i in feed if i >= n_frames)
+        record["frames"]["not_decoded"] = not_decoded
+        if not_decoded:
+            print(f"UWAGA: {len(not_decoded)} indeksów z listy nie zdekodowano (pierwszy {not_decoded[0]})", flush=True)
     _write_json(out / "config.json", record)
     return record

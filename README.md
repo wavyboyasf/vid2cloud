@@ -89,3 +89,18 @@ W `runs/<nazwa>/`: `cloud.ply`, `trajectory_sim3.txt` (pozy klatek kluczowych **
 `poses_history.csv` (pozy po każdym zdarzeniu), `keyframes/kf_NNN_{created,final}.npz`
 (pointmapa, ufność, poza), `aruco_keyframes.csv`, `log.csv` (wiersz na klatkę), `config.json`.
 Algorytm: [docs/pseudocode/engine.md](docs/pseudocode/engine.md), [run.md](docs/pseudocode/run.md).
+
+## Selekcja klatek
+
+Przebieg wstępny bez GPU (env `vid2cloud-tools`) — miary ostrości i ekspozycji każdej klatki
+na obrazie wejścia sieci, potem listy klatek do `run --frames`:
+
+```bash
+python -m vid2cloud.cli quality nagranie.mp4 --out runs/<nazwa>/quality      # quality.csv, fig_ostrosc.png
+python -m vid2cloud.cli select runs/<nazwa>/quality/quality.csv --k 3        # frames/*.txt, manifest.csv
+vid2cloud run nagranie.mp4 --out runs/<nazwa>/fixed_k3_o0 --frames runs/<nazwa>/quality/frames/fixed_k3_o0.txt
+```
+
+Z `--frames` dekodowane są wszystkie klatki, a do silnika trafiają tylko te z listy (`log.csv`
+dostaje kolumnę `fed`). Progi są ustalone z góry: [docs/decisions.md](docs/decisions.md), wpis
+z 2026-10-28; algorytm: [docs/pseudocode/selection.md](docs/pseudocode/selection.md).

@@ -66,6 +66,17 @@ i czekają na swoją sesję (zasada 1 z CLAUDE.md).
       importuje (wejście zależy od modułu skali i od OpenCV). Przenieść `frame_rotation()` /
       `apply_rotation()` do `input/`, gdy powstanie `CameraSource`.
 
+- [ ] **Klip `data/clips/VID_20260921_125357_0-10s.mp4` (`-c copy`, 28.10) ma PTS przesunięte o −0,3 ms**
+      względem oryginału (pierwsza klatka 0,0080 s zamiast 0,0083 s — inna skala czasu kontenera po
+      remuksie). Klatki odpowiadają sobie 1:1 po indeksie (300 = 300 z ffprobe); po PTS nie mapować
+      klipu na oryginał bez uwzględnienia tego przesunięcia.
+
+## Testy
+
+- [ ] **`tests/test_make_boards.py` przerywa pytest w env `mast3r-slam`** — importuje reportlab bez
+      `importorskip`, a reportlab jest tylko w `vid2cloud-tools`. W `mast3r-slam` trzeba dziś
+      `--ignore=tests/test_make_boards.py` (28.10: 228 passed). Poprawka: `pytest.importorskip("reportlab")`.
+
 ## Skala
 
 - [x] **Konwencja półpiksela przy przeliczaniu narożników.** `scale/aruco.rescale_corners()`
@@ -148,6 +159,9 @@ i czekają na swoją sesję (zasada 1 z CLAUDE.md).
       logu per klatka z zasady 3 CLAUDE.md. Wymaga przebiegu przez adapter `engine/mast3r_slam.py`.
       *Adapter jest od 03.10 (`vid2cloud run`); klipy testu C nie zostały przez niego przeliczone.
       Kolumn ostrości i selekcji w `log.csv` jeszcze nie ma — przyjdą z `input/selection.py`.*
+      *28.10: miary ostrości i ekspozycji są w `quality.csv` z `vid2cloud quality` (łączenie z log.csv
+      po indeksie klatki), a log.csv przebiegu z `--frames` ma kolumnę `fed`. Do log.csv ich nie
+      dopisano, żeby przebieg bez `--frames` został bajt w bajt taki jak wcześniej.*
 
 - [ ] **Skany TLS sali koncertowej leżą nierozpakowane** w `data/2026-09-21/reference_lidar/`
       (9 archiwów, 8,4 GB, w środku `.e57` z 23.02.2026, np. `ZK-Koncertowa-23022026-05.e57`).
