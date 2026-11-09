@@ -15,12 +15,20 @@ Kroki (parametry z eval/eval_config.json, ustalone przed wynikami):
     RMS z ICP (jak wypisuje CloudCompare); liczba punktów przed i po SOR;
  g) jeśli obok chmury jest scale_per_keyframe.csv: s_mod = mediana factor_final, s_mod / s_icp − 1;
     chmura po SOR przeskalowana przez s_mod, start z (M_icp · M_c) bez członu skali, ICP sztywne,
-    C2C -> RMS (kształt w skali z taśmy).
+    C2C -> RMS (kształt w skali z taśmy);
+ h) tylko z `--metric` — chmura już w metrach (`cloud_m_*.ply` z `vid2cloud scale`), zamiast g):
+    ta sama chmura po SOR co w c)–e), start z macierzy zgrubnej BEZ członu skali (R, t z
+    similarity_parts(M_c), s = 1), ICP sztywne (icp_rigid z eval_config.json), C2C, te same
+    statystyki i progi co f) -> pola rigid_s1_* w c2c_stats.json i c2c_rigid_s1.ply; obok
+    metric_scale_error = s_icp − 1 z gałęzi głównej (błąd skali chmury w metrach).
+    g) jest wtedy wyłączona: s_mod przeskalowałby chmurę w metrach drugi raz.
+Bez `--metric` (chmury w jednostkach sieci) kroki a)–g) i pliki wyjściowe są takie jak przed
+dodaniem h).
 
 Wyjście w <out>: c2c_stats.json, c2c.ply (chmura po d) z polem odległości C2C — do zrzutów
-z legendą w GUI), c2c_smod.ply (gałąź g), cc_commands.txt, cc_*.log, pliki pośrednie;
-jeden wiersz w eval_cc/c2c_summary.csv (zastępowany przy ponownym przeliczeniu tej samej chmury).
-Env vid2cloud-tools.
+z legendą w GUI), c2c_smod.ply (gałąź g), c2c_rigid_s1.ply (gałąź h), cc_commands.txt, cc_*.log,
+pliki pośrednie; jeden wiersz w eval_cc/c2c_summary.csv (zastępowany przy ponownym przeliczeniu
+tej samej chmury; pola gałęzi h są tylko w c2c_stats.json). Env vid2cloud-tools.
 """
 
 from __future__ import annotations
@@ -106,6 +114,22 @@ def similarity_parts(M: np.ndarray) -> tuple[float, np.ndarray, np.ndarray]:
     """M = [s R | t] -> s, R, t."""
     s = matrix_scale(M)
     return s, M[:3, :3] / s, M[:3, 3].copy()
+
+
+def rigid_start(M_c: np.ndarray, P: np.ndarray) -> np.ndarray:
+    """Punkty po M_c (P = s R x + t) przeniesione na start bez skali: R x + t = t + (P − t) / s.
+
+    Gałąź h): chmura w metrach ma zostać w swojej skali, więc z macierzy zgrubnej bierze się tylko
+    obrót i przesunięcie (similarity_parts), a człon skali s z par punktów jest pomijany.
+    """
+    _, R, t = similarity_parts(M_c)
+    X = transform(np.linalg.inv(M_c), P)  # z powrotem do układu chmury (metry)
+    return X @ R.T + t
+
+
+def frac_fields(prefix: str, stats: dict) -> dict:
+    """Odsetki w progach jako płaskie pola: {"0.05": v} -> {prefix + "frac_5cm": v}."""
+    return {f"{prefix}frac_{round(float(t) * 100)}cm": v for t, v in stats["fraction_le"].items()}
 
 
 def s_mod_from_csv(path: Path) -> tuple[float | None, int]:
@@ -232,7 +256,7 @@ def get_tls_crop(name: str, eval_cc: Path, tls: Path, box: dict) -> tuple[Path, 
 
 
 def evaluate(cloud: Path, name: str, out: Path, *, tls: Path, coarse: Path, crop_source: Path, eval_cc: Path,
-             summary: Path, scale_csv: Path | None, cfg: dict) -> dict:
+             summary: Path, scale_csv: Path | None, cfg: dict, metric: bool = False) -> dict:
     out.mkdir(parents=True, exist_ok=True)
     for stale in out.glob("*REGISTRATION_MATRIX*.txt"):  # resztki przerwanego przebiegu
         stale.unlink()
@@ -297,6 +321,31 @@ def evaluate(cloud: Path, name: str, out: Path, *, tls: Path, coarse: Path, crop
                        "rigid_icp_rms_cc": parse_icp_log(log_r)["rms"],
                        "rigid_c2c": distance_stats(c2c_r[c2c_field(c2c_r)], thresholds)})
 
+    # h) chmura w metrach: sztywnie, s = 1
+    if metric:
+        if scale_csv is not None:
+            raise ValueError("--metric wyklucza gałąź g) (scale_csv) — chmura w metrach byłaby skalowana drugi raz")
+        sor = read_ply(sor_path)
+        Y0 = rigid_start(M_c, xyz(sor))
+        init = sor.copy()
+        init["x"], init["y"], init["z"] = Y0[:, 0], Y0[:, 1], Y0[:, 2]
+        init_path = out / "rec_s1_init.ply"
+        write_ply(init_path, init, comments=("vid2cloud: po SOR, skala 1, start z macierzy zgrubnej bez czlonu skali",))
+        log_s = run_cc(cc_rigid_args(cfg, init_path, tls_crop, out / "c2c_rigid_s1.ply"), out / "cc_rigid_s1.log",
+                       commands)
+        M_s = take_registration_matrix(out, out / "icp_rigid_s1_matrix.txt")
+        c2c_s = read_ply(out / "c2c_rigid_s1.ply")
+        st = distance_stats(c2c_s[c2c_field(c2c_s)], thresholds)
+        result.update({
+            "metric": True,
+            "metric_scale_error": s_icp - 1.0,  # błąd skali chmury w metrach (s_icp z gałęzi głównej)
+            "rigid_s1_M_icp": M_s.tolist(), "rigid_s1_det": float(np.linalg.det(M_s[:3, :3])),
+            "rigid_s1_icp_rms_cc": parse_icp_log(log_s)["rms"],
+            "rigid_s1_mean": st["mean"], "rigid_s1_rms": st["rms"], "rigid_s1_p95": st["p95"],
+            **frac_fields("rigid_s1_", st),
+            "rigid_s1_c2c": st,
+        })
+
     (out / "c2c_stats.json").write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     update_summary(summary, summary_row(result))
     return result
@@ -344,6 +393,9 @@ def main(argv=None) -> int:
     ap.add_argument("--crop-source", type=Path,
                     help="chmura, z której liczony jest prostopadłościan (domyślnie runs/2026-09-21/adapter/<nagranie>/cloud.ply)")
     ap.add_argument("--scale-csv", type=Path, help="domyślnie scale_per_keyframe.csv obok chmury")
+    ap.add_argument("--metric", action="store_true",
+                    help="chmura już w metrach (cloud_m_*.ply z vid2cloud scale): zamiast g) gałąź h) — ICP sztywne "
+                         "przy s = 1 od macierzy zgrubnej bez skali; metric_scale_error = s_icp − 1")
     ap.add_argument("--summary", type=Path, help="domyślnie <eval-cc>/c2c_summary.csv")
     ap.add_argument("--config", type=Path, default=CONFIG)
     args = ap.parse_args(argv)
@@ -352,7 +404,9 @@ def main(argv=None) -> int:
     tls = args.tls or args.eval_cc / DEFAULT_TLS_NAME
     coarse = args.coarse or args.eval_cc / "coarse" / f"{args.name}.txt"
     crop_source = args.crop_source or SESSION / "adapter" / args.name / "cloud.ply"
-    scale_csv = args.scale_csv or args.cloud.parent / "scale_per_keyframe.csv"
+    if args.metric and args.scale_csv:
+        ap.error("--metric wyklucza --scale-csv (gałąź g przeskalowałaby chmurę w metrach drugi raz)")
+    scale_csv = None if args.metric else (args.scale_csv or args.cloud.parent / "scale_per_keyframe.csv")
     summary = args.summary or args.eval_cc / "c2c_summary.csv"
     for label, p in (("chmura", args.cloud), ("TLS", tls), ("macierz zgrubna", coarse), ("źródło prostopadłościanu", crop_source)):
         if not p.exists():
@@ -360,7 +414,7 @@ def main(argv=None) -> int:
             return 2
     t0 = time.time()
     r = evaluate(args.cloud, args.name, args.out, tls=tls, coarse=coarse, crop_source=crop_source,
-                 eval_cc=args.eval_cc, summary=summary, scale_csv=scale_csv, cfg=cfg)
+                 eval_cc=args.eval_cc, summary=summary, scale_csv=scale_csv, cfg=cfg, metric=args.metric)
     c = r["c2c"]
     print(f"{args.cloud} ({args.name}): {r['n_cloud']} pkt, po wycięciu {r['n_crop']}, po SOR {r['n_after_sor']}")
     print(f"  s_coarse {r['s_coarse']:.6f}, s_icp {r['s_icp']:.6f}, RMS ICP (CC) {r['icp_rms_cc']:.4f}")
@@ -369,6 +423,10 @@ def main(argv=None) -> int:
     if r.get("s_mod") is not None:
         print(f"  s_mod {r['s_mod']:.6f} (n {r['s_mod_n']}), s_mod/s_icp − 1 = {r['s_mod_vs_icp_pct']:+.2f} %, "
               f"RMS C2C sztywnie w skali s_mod {r['rigid_c2c']['rms']:.4f} m")
+    if r.get("metric"):
+        print(f"  chmura w metrach: s_icp − 1 = {r['metric_scale_error']:+.5f}; sztywnie, s = 1: RMS C2C "
+              f"{r['rigid_s1_rms']:.4f}, średnia {r['rigid_s1_mean']:.4f}, p95 {r['rigid_s1_p95']:.4f} m; "
+              + ", ".join(f"≤{k} m: {v * 100:.1f} %" for k, v in r["rigid_s1_c2c"]["fraction_le"].items()))
     print(f"  {time.time() - t0:.0f} s -> {args.out}")
     return 0
 

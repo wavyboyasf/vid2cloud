@@ -2,7 +2,7 @@
 
 Moduł: `vid2cloud/run.py` (komenda `vid2cloud run`); źródło klatek: `vid2cloud/input/sources.py`.
 
-**Wejście:** plik wideo V, katalog wyjściowy O, przełącznik `single_thread`.
+**Wejście:** plik wideo V, katalog wyjściowy O, przełącznik `single_thread`; opcjonalnie targets.json.
 
 **Wyjście:** log per klatka, tabela markerów na klatkach kluczowych, opis przebiegu
 (parametry źródła, wersja silnika, czasy) oraz wyjścia Algorytmu 1.
@@ -23,6 +23,8 @@ Moduł: `vid2cloud/run.py` (komenda `vid2cloud run`); źródło klatek: `vid2clo
       mediana i 95. percentyl głębi z_i z pointmapy X_i, udział pikseli z ufnością < 1,5.
 3. Zakończ silnik (Algorytm 1, kroki 11–13); policz punkty chmury.
 4. Uzupełnij opis przebiegu o czasy całkowite i liczby wyników; status ← „zakończony”.
+5. **Jeśli** podano wzorce (targets.json, sprawdzony przed krokiem 1): Algorytm 4 na O;
+   wynik albo komunikat błędu → sekcja „scale” opisu przebiegu (błąd nie usuwa wyników kroków 1–4).
 
 **Przekształcenie narożników** (konwencja środka piksela):
 τ(x, y) = ((x + ½) · s_x − ½ − o_x, (y + ½) · s_y − ½ − o_y),

@@ -10,6 +10,13 @@
 #   runs/2026-09-21/selection/<nazwa>/*/cloud.ply
 #   runs/2026-09-21/realityscan/*.ply            nazwa = nazwa pliku; prostopadłościan z tej samej chmury
 #                                                 (osobna macierz zgrubna: eval_cc/coarse/<nazwa>.txt)
+#   runs/2026-09-21/adapter/*/cloud_m_<wariant>.ply   chmury w metrach z `vid2cloud scale` (global, kf_interp,
+#                                                 kf_mnk); nazwa = <nagranie>_m_<wariant>; macierz zgrubna =
+#                                                 macierz nagrania · diag(1/f_global) (eval/coarse_metric.py,
+#                                                 te same pary punktów co dla cloud.ply); prostopadłościan
+#                                                 z cloud_m_global.ply (= f_global · cloud.ply, więc po złożeniu
+#                                                 ten sam co nagrania); --metric: zamiast g) gałąź h)
+#                                                 (ICP sztywne przy s = 1, metric_scale_error = s_icp − 1)
 # Wyniki: runs/2026-09-21/eval_cc/c2c/<źródło>/<…>/ + jeden wiersz na chmurę w eval_cc/c2c_summary.csv.
 set -u
 REPO=/home/wavy/dev/vid2cloud
@@ -60,6 +67,31 @@ evaluate() {  # chmura nazwa out [crop_source]
     echo "     kod $code  $(tail -1 "$out/eval_cloud.log")"
 }
 
+evaluate_metric() {  # katalog_przebiegu nagranie wariant
+    local d=$1 rec=$2 v=$3
+    local cloud=$d/cloud_m_$v.ply name=${rec}_m_$v out=$ECC/c2c/adapter_m/$(basename "$d")/$v
+    local base=$ECC/coarse/$rec.txt coarse=$ECC/coarse/${rec}_m_$v.txt
+    local missing=""
+    [ -f "$base" ] || missing="$missing macierz:eval_cc/coarse/$rec.txt"
+    [ -f "$TLS" ] || missing="$missing TLS:${TLS#$REPO/}"
+    [ -f "$d/scale.json" ] || missing="$missing scale.json"
+    [ -f "$d/cloud_m_global.ply" ] || missing="$missing prostopadłościan:${d#$REPO/}/cloud_m_global.ply"
+    local state="gotowa"
+    [ -f "$out/c2c_stats.json" ] && state="policzona"
+    [ -n "$missing" ] && state="brak:$missing"
+    n=$((n + 1))
+    printf '%3d  %-28s %-62s %s\n' "$n" "$name" "${cloud#$REPO/}" "$state"
+    [ "$DRY" -eq 1 ] && return
+    if [ -n "$missing" ]; then return; fi
+    if [ "$state" = "policzona" ] && [ "$FORCE" -eq 0 ]; then return; fi
+    "$PY" eval/coarse_metric.py "$base" "$d/scale.json" "$coarse" || return
+    mkdir -p "$out"
+    "$PY" eval/eval_cloud.py "$cloud" --name "$name" --out "$out" --coarse "$coarse" \
+        --crop-source "$d/cloud_m_global.ply" --metric > "$out/eval_cloud.log" 2>&1
+    local code=$?
+    echo "     kod $code  $(tail -1 "$out/eval_cloud.log")"
+}
+
 echo "# $(date -Iseconds)  dry-run=$DRY  TLS=${TLS#$REPO/}"
 for d in "$S"/adapter/*/; do
     d=${d%/}
@@ -72,6 +104,14 @@ for d in "$S"/selection/*/*/; do
     [ -f "$d/cloud.ply" ] || continue
     name=$(basename "$(dirname "$d")")
     evaluate "$d/cloud.ply" "$name" "$ECC/c2c/selection/$name/$(basename "$d")"
+done
+for d in "$S"/adapter/*/; do
+    d=${d%/}
+    compgen -G "$d/cloud_m_*.ply" > /dev/null || continue
+    name=$(recording_name "$d")
+    for v in global kf_interp kf_mnk; do
+        evaluate_metric "$d" "$name" "$v"
+    done
 done
 if compgen -G "$S/realityscan/*.ply" > /dev/null; then
     for f in "$S"/realityscan/*.ply; do

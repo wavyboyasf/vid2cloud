@@ -140,3 +140,21 @@ def test_cli_writes_matrix_and_report(tmp_path):
     M = cfp.read_matrix(out)
     assert cfp.matrix_scale(M) == pytest.approx(S_TRUE, rel=1e-3)
     assert (tmp_path / "coarse" / "nagranie_report.json").exists()
+
+
+def test_metric_coarse_maps_scaled_cloud_like_base():
+    """M_m · (f·x) = M_c · x dla dowolnego podobieństwa M_c; skala macierzy dzieli się przez f."""
+    spec = importlib.util.spec_from_file_location(
+        "coarse_metric", Path(__file__).resolve().parents[1] / "eval" / "coarse_metric.py")
+    cm = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(cm)
+    rng = np.random.default_rng(3)
+    s, R, t = 1.48, _rotation(rng.normal(size=3), 0.7), rng.normal(size=3)
+    M_c = np.eye(4)
+    M_c[:3, :3], M_c[:3, 3] = s * R, t
+    x = rng.normal(size=(20, 3))
+    f = 1.6473
+    M_m = cm.metric_coarse(M_c, f)
+    hom = lambda M, P: P @ M[:3, :3].T + M[:3, 3]  # noqa: E731
+    np.testing.assert_allclose(hom(M_m, f * x), hom(M_c, x), rtol=1e-12, atol=1e-12)
+    assert cm.matrix_scale(M_m) == pytest.approx(s / f)

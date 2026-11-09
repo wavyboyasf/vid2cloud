@@ -1,7 +1,7 @@
 # Instrukcja: przygotowanie referencji TLS i dopasowania zgrubnego w CloudCompare
 
-Do zrobienia ręcznie w GUI, raz: (a) TLS bez elementów ruchomych, (b) pary punktów dla
-każdego nagrania, (c) macierz zgrubna. Reszta (wycinanie, SOR, ICP, C2C, statystyki) idzie
+Do zrobienia raz: (a) referencja TLS (jedna komenda, bez GUI), ręcznie w GUI (b) pary punktów
+dla każdego nagrania, (c) macierz zgrubna. Reszta (wycinanie, SOR, ICP, C2C, statystyki) idzie
 wsadowo: `bash eval/eval_all.sh`.
 
 CloudCompare 2.13.2 (flatpak, ten sam co w trybie wsadowym). Menu podane po angielsku, tak jak
@@ -15,34 +15,22 @@ współrzędne punktów).
 
 ---
 
-## a) TLS bez elementów ruchomych
+## a) Referencja TLS — cały skan, bez usuwania elementów ruchomych
 
-TLS jest z 23.02.2026, nagrania z 21.09.2026 — krzesła, pulpity, instrumenty i przedmioty na
-scenie mogły stać inaczej. Usuwamy je z referencji, żeby C2C nie mierzyło przestawionych mebli.
+Referencją jest cały TLS po podpróbkowaniu do 1 cm, z meblami — decyzja z 2026-11-09
+(`docs/decisions.md`): C2C liczone jest od rekonstrukcji do TLS, więc wycięcie mebli tylko z TLS
+zwiększałoby odległości punktów rekonstrukcji na meblach, które stoją tam, gdzie stały, a meble
+przestawione dają duże odległości niezależnie od TLS. Segmentacji w GUI nie robimy.
 
-1. **File > Open** → `runs/2026-09-21/eval_cc/tls/tls_koncertowa_1cm.ply`.
-2. W drzewie **DB Tree** zaznacz chmurę. Dla czytelności: w panelu **Properties** ustaw
-   **Colors: RGB** (kolory ze skanera).
-3. **Edit > Segment** (ikona nożyczek na pasku głównym, skrót **T**). Pojawia się mały pasek
-   narzędzi segmentacji.
-   - Spacja (albo przycisk **Pause segmentation**) przełącza między obracaniem widoku a rysowaniem.
-   - W trybie rysowania: lewy przycisk dodaje wierzchołek wieloboku, prawy go zamyka.
-   - **Segment Out** (ikona z minusem) ukrywa punkty wewnątrz wieloboku, **Segment In** — na zewnątrz.
-   - Usuń krzesła, pulpity, statywy i wszystko, co da się przestawić. Ściany, podłoga, sufit,
-     kolumny, framugi, kominki, stała zabudowa — zostają. Rysuj kilka wieloboków po kolei,
-     obracając widok między nimi (najwygodniej z góry, a potem z boku — przyciski widoków
-     standardowych, m.in. **Top view**, są na pionowym pasku *Viewing tools* po lewej stronie okna).
-4. Zatwierdź zielonym **✓ (Confirm segmentation)**. CloudCompare dzieli chmurę na dwie: widoczną
-   i ukrytą (w DB Tree pojawi się druga chmura z dopiskiem `.remaining` albo `.segmented`).
-   Kliknij obie na przemian (pole wyboru przy nazwie), żeby sprawdzić, która jest bez mebli.
-5. Zaznacz chmurę bez mebli → **File > Save** (Ctrl+S) → typ **PLY** → nazwa
-   `runs/2026-09-21/eval_cc/tls/tls_koncertowa_1cm_static.ply` → format **Binary little endian**.
-   Pola skalarne (intensywność) mogą zostać.
-6. Pliku `tls_koncertowa_1cm.ply` nie nadpisuj — jest punktem wyjścia, gdyby trzeba było
-   segmentować jeszcze raz.
+`eval_cloud.py` i `eval_all.sh` biorą domyślnie `tls_koncertowa_1cm_static.ply`; ta nazwa to
+dowiązanie do pełnego pliku (założone 09.11). Gdyby go brakowało:
 
-`eval_cloud.py` domyślnie bierze wersję `_static`; jeśli jej nie ma, `eval_all.sh --dry-run`
-pokazuje to jako brak.
+```bash
+cd /home/wavy/dev/vid2cloud/runs/2026-09-21/eval_cc/tls
+ln -s tls_koncertowa_1cm.ply tls_koncertowa_1cm_static.ply
+```
+
+Pliku `tls_koncertowa_1cm.ply` nie nadpisuj i nie edytuj w GUI — dowiązanie wskazuje na niego.
 
 ---
 

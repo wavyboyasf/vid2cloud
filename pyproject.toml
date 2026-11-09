@@ -29,6 +29,10 @@ vid2cloud = "vid2cloud.cli:app"
 [tool.setuptools.packages.find]
 include = ["vid2cloud*"]
 
+[tool.setuptools.package-data]
+# Zamrożone σ_obs i τ metody B (eval/scale_params.py, docs/decisions.md 2026-11-04).
+vid2cloud = ["scale/params.json"]
+
 [tool.pytest.ini_options]
 # Bez tego pytest zbierałby eval/test_c_start_point.py i eval/test_e_distance.py,
 # które są skryptami uruchamianymi ręcznie, nie testami jednostkowymi.

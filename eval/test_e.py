@@ -9,6 +9,16 @@ Tabela 2 („bok znacznika, mieszkanie”, VID_ODLEGLOSC): `marker_side_scale.cs
 eval/marker_side_scale.py — inny wzorzec i inny pokój, więc NIE jest łączona z tabelą 1.
 Spearman tylko informacyjnie (3 plansze).
 
+Łączny ρ (tabele 1 i 2) liczony jest między klatkami kluczowymi, więc jest obciążony skalą
+klatki — każda klatka ma własne s_k i własny błąd skali sieci (decyzja autora 2026-10-30,
+dopisana 2026-11-04). Dlatego obok są tabele w obrębie klatki kluczowej (`within_keyframe_pairs`):
+w każdej klatce z ≥ 2 odcinkami (planszami) wszystkie pary i < j, znak (y_j − y_i)·(x_j − x_i)
+— > 0 zgodna, < 0 niezgodna, = 0 remis (jak w τ Kendalla) — i odchylenie y od mediany klatki [%]:
+    1b (21.09): x = z_mid_m, y = net_cr -> test_e_w_klatce_pary.csv, test_e_w_klatce_podsumowanie.csv;
+        informacyjnie y = final -> test_e_w_klatce_pary_final.csv, test_e_w_klatce_podsumowanie_final.csv;
+    2b (VID_ODLEGLOSC): x = z_m, y = factor_net_median, grupy po kf -> test_e_bok_znacznika_w_klatce_*.csv;
+        wiersze z side_spread_pct > 5 % mają flagę (nie są usuwane).
+
 Skrypt nie interpretuje — wypisuje liczby. Env vid2cloud-tools.
 
     python eval/test_e.py
@@ -99,6 +109,66 @@ def correlations(rows: list[dict], group: str, x: str, y: str) -> list[dict]:
     return out
 
 
+RHO_NOTE = "między klatkami kluczowymi — obciążony skalą klatki (decyzja 2026-10-30)"
+SPREAD_FLAG_PCT = 5.0
+
+
+def within_keyframe_pairs(rows: list[dict], key, x: str, y: str, label: str | None = None) -> list[dict]:
+    """Pary i < j w każdej grupie `key` (np. (przebieg, kf)) z ≥ 2 wierszami, w kolejności wierszy.
+
+    znak = sign((y_j − y_i)·(x_j − x_i)): "zgodna" (> 0), "niezgodna" (< 0), "remis" (= 0).
+    dev_*_pct = (y − mediana y grupy) / mediana · 100. Wiersze bez x albo y nie wchodzą do grup.
+    `row_i`, `row_j` — indeksy wierszy w `rows` (do policzenia zakresu odchyleń bez powtórzeń).
+    """
+    key = (key,) if isinstance(key, str) else tuple(key)
+    groups: dict[tuple, list[int]] = {}
+    for idx, r in enumerate(rows):
+        if r.get(x) is None or r.get(y) is None:
+            continue
+        groups.setdefault(tuple(r[k] for k in key), []).append(idx)
+    out = []
+    for g, members in groups.items():
+        if len(members) < 2:
+            continue
+        med = float(np.median([rows[i][y] for i in members]))
+        dev = {i: (rows[i][y] - med) / med * 100.0 for i in members}
+        for a in range(len(members)):
+            for b in range(a + 1, len(members)):
+                i, j = members[a], members[b]
+                dx, dy = rows[j][x] - rows[i][x], rows[j][y] - rows[i][y]
+                prod = dx * dy
+                pair = dict(zip(key, g))
+                if label is not None:
+                    pair.update({f"{label}_i": rows[i][label], f"{label}_j": rows[j][label]})
+                pair.update({"row_i": i, "row_j": j, "x_i": rows[i][x], "x_j": rows[j][x],
+                             "y_i": rows[i][y], "y_j": rows[j][y], "dx": dx, "dy": dy,
+                             "znak": "zgodna" if prod > 0 else ("niezgodna" if prod < 0 else "remis"),
+                             "dev_i_pct": dev[i], "dev_j_pct": dev[j], "median_y": med, "n_w_klatce": len(members)})
+                out.append(pair)
+    return out
+
+
+def within_summary(pairs: list[dict], by: str, key, order: list) -> list[dict]:
+    """Na wartość `by` (np. przebieg) i łącznie: klatki z ≥ 2 wierszami, pary, zgodne, niezgodne, remisy,
+    zakres odchyleń % (każdy wiersz raz)."""
+    key = (key,) if isinstance(key, str) else tuple(key)
+    out = []
+    for g in [*order, None]:
+        sel = [p for p in pairs if g is None or p[by] == g]
+        devs = {}
+        for p in sel:
+            devs[p["row_i"]], devs[p["row_j"]] = p["dev_i_pct"], p["dev_j_pct"]
+        out.append({by: "łącznie" if g is None else g,
+                    "klatki_ge2": len({tuple(p[k] for k in key) for p in sel}),
+                    "pary": len(sel),
+                    "zgodne": sum(p["znak"] == "zgodna" for p in sel),
+                    "niezgodne": sum(p["znak"] == "niezgodna" for p in sel),
+                    "remisy": sum(p["znak"] == "remis" for p in sel),
+                    "odch_min_pct": min(devs.values()) if devs else None,
+                    "odch_max_pct": max(devs.values()) if devs else None})
+    return out
+
+
 # --------------------------------------------------------------------------- #
 # Zapis, wykres
 # --------------------------------------------------------------------------- #
@@ -169,6 +239,14 @@ def plot_scatter(rows: list[dict], group: str, x: str, y: str, xlabel: str, ylab
 # Tabela 2 — bok znacznika
 # --------------------------------------------------------------------------- #
 
+WITHIN_PAIR_COLUMNS = ("przebieg", "nagranie", "kf", "n_w_klatce", "odcinek_i", "odcinek_j", "x_i", "x_j",
+                       "y_i", "y_j", "dx", "dy", "znak", "median_y", "dev_i_pct", "dev_j_pct")
+WITHIN_SUMMARY_COLUMNS = ("przebieg", "klatki_ge2", "pary", "zgodne", "niezgodne", "remisy",
+                          "odch_min_pct", "odch_max_pct", "nagranie")
+WITHIN_MARKER_COLUMNS = ("nagranie", "kf", "n_w_klatce", "marker_id_i", "marker_id_j", "x_i", "x_j", "y_i", "y_j",
+                         "dx", "dy", "znak", "median_y", "dev_i_pct", "dev_j_pct", "spread_i_pct", "spread_j_pct",
+                         "flaga_rozrzut_gt_5pct")
+
 MARKER_COLUMNS = ("kf", "frame_index", "marker_id", "z_canon", "z_m", "side_px_512_mean", "factor_net_median",
                   "side_spread_pct", "factor_final_median", "status")
 
@@ -205,9 +283,33 @@ def main(argv=None) -> int:
                  "net_cr = L / d_canon przy powstaniu kf [m / jedn. sieci]", args.out / "test_e_net_cr_z_mid.png")
     print("Tabela 1 — pary taśmy, sesja 21.09 (status ok)\n")
     print(md_table(("przebieg", "kf", "odcinek", "z_mid_m", "net_cr", "final"), rows))
-    print("\nSpearman ρ(net_cr, z_mid_m)\n")
+    print(f"\nSpearman ρ(net_cr, z_mid_m) — {RHO_NOTE}\n")
     print(md_table(("przebieg", "n", "rho", "z_mid_m_min", "z_mid_m_max"), corr, 3))
     print(f"\nzapisano {args.out}/test_e_pary.csv, test_e_spearman.csv, test_e_net_cr_z_mid.png")
+
+    # Tabela 1b — w obrębie klatki kluczowej (net_cr) i informacyjnie final
+    order = list(dict.fromkeys(r["przebieg"] for r in rows))
+    rec = {r["przebieg"]: r["nagranie"] for r in rows}
+    for p in args.runs:  # przebieg bez wierszy ok też ma swój wiersz podsumowania (zera)
+        rec.setdefault(p.name, Path(json.loads((p / "config.json").read_text(encoding="utf-8"))["video"]).stem)
+        if p.name not in order:
+            order.append(p.name)
+    for y, suffix, title in (("net_cr", "", "Tabela 1b — w obrębie klatki kluczowej, y = net_cr"),
+                             ("final", "_final", "Tabela 1b (informacyjnie) — w obrębie klatki kluczowej, y = final")):
+        pairs = within_keyframe_pairs(rows, ("przebieg", "kf"), "z_mid_m", y, label="odcinek")
+        for pr in pairs:
+            pr["nagranie"] = rec[pr["przebieg"]]
+        summ = within_summary(pairs, "przebieg", ("przebieg", "kf"), order)
+        for sm in summ:
+            sm["nagranie"] = rec.get(sm["przebieg"], "")
+        write_csv(args.out / f"test_e_w_klatce_pary{suffix}.csv", WITHIN_PAIR_COLUMNS, pairs)
+        write_csv(args.out / f"test_e_w_klatce_podsumowanie{suffix}.csv", WITHIN_SUMMARY_COLUMNS, summ)
+        print(f"\n{title} (x = z_mid_m)\n")
+        print(md_table(("przebieg", "kf", "odcinek_i", "odcinek_j", "x_i", "x_j", "y_i", "y_j", "znak",
+                        "dev_i_pct", "dev_j_pct"), pairs))
+        print()
+        print(md_table(WITHIN_SUMMARY_COLUMNS[:-1], summ, 2))
+    print(f"\nzapisano {args.out}/test_e_w_klatce_{{pary,podsumowanie}}{{,_final}}.csv")
 
     # Tabela 2
     if not args.marker_csv.exists():
@@ -231,8 +333,29 @@ def main(argv=None) -> int:
                  args.marker_out / "test_e_bok_znacznika.png")
     print("\nTabela 2 — bok znacznika, mieszkanie (VID_ODLEGLOSC; nie łączyć z tabelą 1)\n")
     print(md_table(MARKER_COLUMNS, mrows))
-    print("\nSpearman ρ(współczynnik, z_m) — informacyjnie\n")
+    print(f"\nSpearman ρ(współczynnik, z_m) — informacyjnie; łącznie: {RHO_NOTE}\n")
     print(md_table(cols, mcorr, 3))
+
+    # Tabela 2b — w obrębie klatki kluczowej, po planszach
+    for r in ok:
+        r["rozrzut_gt_5pct"] = r["side_spread_pct"] is not None and r["side_spread_pct"] > SPREAD_FLAG_PCT
+    mpairs = within_keyframe_pairs(ok, ("kf",), "z_m", "factor_net_median", label="marker_id")
+    for pr in mpairs:
+        ri, rj = ok[pr["row_i"]], ok[pr["row_j"]]
+        pr.update({"spread_i_pct": ri["side_spread_pct"], "spread_j_pct": rj["side_spread_pct"],
+                   "flaga_rozrzut_gt_5pct": ri["rozrzut_gt_5pct"] or rj["rozrzut_gt_5pct"]})
+    for pr in mpairs:
+        pr["nagranie"] = "VID_ODLEGLOSC"
+    msumm = within_summary(mpairs, "nagranie", ("kf",), ["VID_ODLEGLOSC"])[:1]  # jedno nagranie = łącznie
+    msumm[0]["pary_z_flaga"] = sum(pr["flaga_rozrzut_gt_5pct"] for pr in mpairs)
+    write_csv(args.marker_out / "test_e_bok_znacznika_w_klatce_pary.csv", WITHIN_MARKER_COLUMNS, mpairs)
+    write_csv(args.marker_out / "test_e_bok_znacznika_w_klatce_podsumowanie.csv",
+              ("nagranie", *WITHIN_SUMMARY_COLUMNS[1:-1], "pary_z_flaga"), msumm)
+    print("\nTabela 2b — w obrębie klatki kluczowej (x = z_m, y = factor_net_median; flaga: rozrzut boków > 5 %)\n")
+    print(md_table(("kf", "marker_id_i", "marker_id_j", "x_i", "x_j", "y_i", "y_j", "znak", "dev_i_pct", "dev_j_pct",
+                    "spread_i_pct", "spread_j_pct", "flaga_rozrzut_gt_5pct"), mpairs))
+    print()
+    print(md_table(("nagranie", *WITHIN_SUMMARY_COLUMNS[1:-1], "pary_z_flaga"), msumm, 2))
     print(f"\nzapisano {args.marker_out}/")
     return 0
 

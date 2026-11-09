@@ -7,6 +7,12 @@ Macierz zgrubna z 8 naroży wskazanych z błędem 2 cm (Umeyama). Kryteria ustal
 uruchomieniem: skala odtworzona do 0,5 %, RMS C2C w granicach ±15 % σ (składowa szumu
 prostopadła do ściany ma RMS σ; siatka 5 mm dokłada ok. √(h²/6) = 2 mm w kwadraturze).
 Test integracyjny wymaga CloudCompare (flatpak) — bez niego jest pomijany.
+
+Gałąź h) (`--metric`, chmura w metrach): to samo pudełko, rekonstrukcja z TLS przez obrót
+i przesunięcie, z brakującą skalą s_err (y = s_err · R · x + t), s_err = 1 i 1,05. Kryteria
+ustalone przed uruchomieniem: s_icp odtworzone do 0,5 % (s_icp ≈ s_err), metric_scale_error
+= s_icp − 1; przy s_err = 1 RMS gałęzi s = 1 w granicach ±15 % σ (jak gałąź główna), przy
+s_err = 1,05 RMS gałęzi s = 1 > 3 σ i > 2 × RMS gałęzi głównej; gałąź g) nie działa.
 """
 
 import importlib.util
@@ -87,6 +93,28 @@ def test_similarity_parts_and_total_scale():
     s, R2, t = ec.similarity_parts(M2 @ M1)
     assert s == pytest.approx(1.5 * 0.98)
     np.testing.assert_allclose(R2 @ R2.T, np.eye(3), atol=1e-12)
+
+
+def test_rigid_start_drops_coarse_scale_only():
+    """P = s R x + t -> R x + t: obrót i przesunięcie z macierzy zgrubnej zostają, skala znika."""
+    rng = np.random.default_rng(5)
+    R = _rot([0.3, -1.0, 0.4], 25.0)
+    M = cfp.to_matrix(1.05, R, [2.0, -1.0, 0.5])
+    x = rng.normal(size=(30, 3))
+    np.testing.assert_allclose(ec.rigid_start(M, ec.transform(M, x)), x @ R.T + [2.0, -1.0, 0.5], atol=1e-12)
+
+
+def test_frac_fields_names_from_thresholds():
+    st = {"fraction_le": {"0.05": 0.5, "0.10": 0.75, "0.20": 1.0}}
+    assert ec.frac_fields("rigid_s1_", st) == {"rigid_s1_frac_5cm": 0.5, "rigid_s1_frac_10cm": 0.75,
+                                               "rigid_s1_frac_20cm": 1.0}
+
+
+def test_metric_excludes_scale_csv(tmp_path, capsys):
+    """--metric z --scale-csv to błąd przed liczeniem (gałąź g skalowałaby chmurę w metrach drugi raz)."""
+    with pytest.raises(SystemExit):
+        ec.main([str(tmp_path / "c.ply"), "--name", "x", "--out", str(tmp_path / "o"), "--metric",
+                 "--scale-csv", str(tmp_path / "s.csv")])
 
 
 def test_s_mod_median_of_factor_final(tmp_path):
@@ -212,3 +240,50 @@ def test_synthetic_box_scale_and_rms(tmp_path):
     assert len(summary) == 2
     c2c = read_ply(out / "c2c.ply")
     assert len(c2c) == r["n_after_sor"] and ec.c2c_field(c2c)
+
+
+@pytest.mark.skipif(not _cc_available(), reason="brak CloudCompare (flatpak)")
+@pytest.mark.parametrize("s_err", [1.0, 1.05])
+def test_synthetic_metric_branch_rigid_s1(tmp_path, s_err):
+    """Chmura w metrach: TLS po obrocie i przesunięciu, brakująca skala s_err (y = s_err · R · x + t)."""
+    rng = np.random.default_rng(11)
+    tls = _box_grid(0.005)
+    write_ply(tmp_path / "tls.ply", xyz_vertices(tls))
+    true = _box_random(200_000, rng) + rng.normal(0, SIGMA, size=(200_000, 3))
+    outliers = rng.uniform(-0.1 * L, 1.1 * L, size=(int(0.02 * len(true)), 3))
+    world = np.vstack([true, outliers])
+    rec = (world - T_TRUE) @ R_TRUE / s_err
+    cloud = tmp_path / "run" / "cloud_m_global.ply"
+    write_ply(cloud, xyz_vertices(rec))
+    (cloud.parent / "scale_per_keyframe.csv").write_text("kf,factor_final\n0,1.5\n", encoding="utf-8")  # ma być pominięty
+
+    corners = np.array([[i, j, k] for i in (0, 1) for j in (0, 1) for k in (0, 1)], float) * L
+    np.savetxt(tmp_path / "p_rec.txt", (corners - T_TRUE) @ R_TRUE / s_err, delimiter=",")
+    np.savetxt(tmp_path / "p_tls.txt", corners + rng.normal(0, 0.02, size=corners.shape), delimiter=",")
+    coarse = tmp_path / "coarse.txt"
+    assert cfp.main(["syn", "--rec", str(tmp_path / "p_rec.txt"), "--tls", str(tmp_path / "p_tls.txt"),
+                     "--out", str(coarse)]) == 0
+
+    out = tmp_path / "out"
+    assert ec.main([str(cloud), "--name", "syn_m", "--out", str(out), "--eval-cc", str(tmp_path / "ecc"),
+                    "--tls", str(tmp_path / "tls.ply"), "--coarse", str(coarse), "--crop-source", str(cloud),
+                    "--metric"]) == 0
+    r = json.loads((out / "c2c_stats.json").read_text(encoding="utf-8"))
+    print(f"\ns_err {s_err}: s_coarse {r['s_coarse']:.5f}, s_icp {r['s_icp']:.5f}, metric_scale_error "
+          f"{r['metric_scale_error']:+.5f}, RMS C2C (ICP ze skalą) {r['c2c']['rms']:.5f}; sztywnie s = 1: "
+          f"RMS {r['rigid_s1_rms']:.5f}, średnia {r['rigid_s1_mean']:.5f}, p95 {r['rigid_s1_p95']:.5f}, "
+          f"≤5 cm {r['rigid_s1_frac_5cm']:.4f}, ≤10 cm {r['rigid_s1_frac_10cm']:.4f}, ≤20 cm {r['rigid_s1_frac_20cm']:.4f}, "
+          f"RMS ICP (CC) {r['rigid_s1_icp_rms_cc']:.5f}, det {r['rigid_s1_det']:.9f}")
+    assert r["metric"] is True and r["s_mod"] is None and r["scale_csv"] is None
+    assert not (out / "c2c_smod.ply").exists() and (out / "c2c_rigid_s1.ply").exists()
+    assert (out / "cc_commands.txt").read_text().count("cc.sh") == 2
+    assert abs(r["s_icp"] / s_err - 1) < 0.005
+    assert r["metric_scale_error"] == pytest.approx(r["s_icp"] - 1.0, abs=1e-15)
+    assert r["rigid_s1_det"] == pytest.approx(1.0, abs=1e-6)
+    assert r["c2c"]["rms"] == pytest.approx(SIGMA, rel=0.15)
+    if s_err == 1.0:
+        assert r["rigid_s1_rms"] == pytest.approx(SIGMA, rel=0.15)
+    else:
+        assert r["rigid_s1_rms"] > 3 * SIGMA and r["rigid_s1_rms"] > 2 * r["c2c"]["rms"]
+    c2c = read_ply(out / "c2c_rigid_s1.ply")
+    assert len(c2c) == r["n_after_sor"] == r["rigid_s1_c2c"]["n"]

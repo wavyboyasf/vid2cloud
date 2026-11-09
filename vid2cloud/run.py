@@ -11,6 +11,13 @@ Pliki w katalogu przebiegu (`--out`):
                             narożniki w pełnej rozdzielczości i przeliczone na wejście modelu
     poses_history.csv, trajectory_sim3.txt, cloud.ply, keyframes/  — z silnika
 
+Skala (`targets`, `vid2cloud run --targets`): po `finalize()` i zapisie config.json ze statusem
+"done" woła `scale/pipeline.py::scale_run()` na katalogu przebiegu — te same pliki co
+`vid2cloud scale` (scale_per_keyframe.csv, scale_keyframes.csv, cloud_m_*.ply, scale.json).
+targets.json jest sprawdzany PRZED startem silnika. Wyjątek w kroku skali jest łapany: wyniki
+silnika zostają, config.json dostaje sekcję "scale" ze statusem "error" i komunikatem.
+Bez `targets` przebieg jak wcześniej (config.json bez sekcji "scale").
+
 Lista klatek (`frames`, `vid2cloud run --frames`): FileSource dalej dekoduje wszystkie klatki
 po kolei, bez seeka, a do silnika trafiają tylko indeksy z listy — reszta jest pomijana PO
 dekodowaniu. Silnik startuje na pierwszej klatce z listy. Bez listy przebieg jest taki sam
@@ -145,11 +152,13 @@ def run_video(
     max_frames: Optional[int] = None,
     progress_every: int = 100,
     frames: Optional[Path] = None,
+    targets: Optional[Path] = None,
 ) -> dict:
     """Pełny przebieg nagrania przez MASt3R-SLAM. Zwraca słownik zapisany jako config.json.
 
     `frames` — plik listy klatek (`selection.parse_frame_list`); do silnika idą tylko te
     indeksy. `max_frames` ogranicza liczbę klatek zdekodowanych, nie podanych do silnika.
+    `targets` — targets.json; po silniku skala osobno dla każdej klatki kluczowej.
     """
     t_start = time.perf_counter()
     started_at = datetime.now().astimezone().isoformat(timespec="seconds")
@@ -163,6 +172,12 @@ def run_video(
         frames = Path(frames).resolve()
         frame_list = parse_frame_list(frames.read_text(encoding="utf-8"))  # błąd listy przed startem silnika
         feed = set(frame_list)
+    if targets is not None:  # błąd w targets.json przed startem silnika, nie po 10 minutach GPU
+        from vid2cloud.scale.estimate import load_targets
+        from vid2cloud.scale.per_keyframe import segments_with_refs
+
+        targets = Path(targets).absolute()
+        segments_with_refs(load_targets(targets))
     out.mkdir(parents=True, exist_ok=True)
 
     # Ciężki import (torch, upstream) dopiero tutaj — `vid2cloud --help` ma działać bez GPU.
@@ -336,4 +351,33 @@ def run_video(
         if not_decoded:
             print(f"UWAGA: {len(not_decoded)} indeksów z listy nie zdekodowano (pierwszy {not_decoded[0]})", flush=True)
     _write_json(out / "config.json", record)
+    if targets is not None:
+        record["scale"] = run_scale_step(out, targets)
+        record["times_s"]["scale"] = record["scale"].pop("t_s")
+        _write_json(out / "config.json", record)
     return record
+
+
+def run_scale_step(out: Path, targets: Path) -> dict:
+    """Krok skali po silniku. Wyjątek nie wychodzi na zewnątrz — wraca jako status "error"."""
+    from vid2cloud.scale.pipeline import scale_run
+
+    t0 = time.perf_counter()
+    section: dict = {"targets": str(targets)}
+    try:
+        rec = scale_run(out, targets, log=lambda m: print(m, flush=True))
+    except Exception as exc:  # noqa: BLE001 — wyniki silnika są już zapisane, skala ich nie psuje
+        section.update({"status": "error", "message": f"{type(exc).__name__}: {exc}"})
+        print(f"skala: BŁĄD {section['message']}", flush=True)
+    else:
+        section.update({
+            "status": rec["status"],
+            "f_global": rec.get("global", {}).get("f"),
+            "n_par": rec["n_pairs_ok"],
+            "n_keyframes_with_obs": rec["n_keyframes_with_obs"],
+            "files": rec["files"],
+            **({"message": rec["message"]} if rec.get("message") else {}),
+            **({"warnings": rec["warnings"]} if rec["warnings"] else {}),
+        })
+    section["t_s"] = time.perf_counter() - t0
+    return section

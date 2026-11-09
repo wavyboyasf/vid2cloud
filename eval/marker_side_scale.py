@@ -31,10 +31,9 @@ import numpy as np
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
-sys.path.insert(0, str(REPO_ROOT / "eval"))
 
-from scale_per_keyframe import STATES, load_run, s_at, write_csv  # noqa: E402
 from vid2cloud.scale.lift import C_MIN, fit_plane_ray, lift_marker, mean_confidence  # noqa: E402
+from vid2cloud.scale.per_keyframe import STATES, load_run, s_at, write_csv  # noqa: E402
 
 DEFAULT_RUN = REPO_ROOT / "runs" / "odleglosc" / "adapter"
 SIDE_MM = 149.7

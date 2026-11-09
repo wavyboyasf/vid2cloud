@@ -67,6 +67,27 @@ python -m vid2cloud.scale.aruco --video klip.mp4 --frame 120 --out debug.jpg
 python -m vid2cloud.scale.aruco --video klip.mp4 --render podglad.mp4     # film z obrysami + CSV per klatka
 ```
 
+## Skala metryczna osobno dla każdej klatki kluczowej
+
+Wzorcem są odcinki między markerami zmierzone taśmą (`targets.json`, milimetry). Moduł skali
+liczy współczynnik każdej pary (klatka kluczowa, odcinek), a z nich wektor f_k w trzech
+wariantach: **A** — interpolacja log f w czasie, **B** — wyrównanie MNK (σ_obs i τ zamrożone
+w `vid2cloud/scale/params.json`), **globalny** — jedna liczba do porównania. Na gotowym
+katalogu przebiegu, bez GPU (env `vid2cloud-tools`):
+
+```bash
+python -m vid2cloud.cli scale runs/2026-09-21/adapter/daleko_wolno --targets data/2026-09-21/notes/targets.json
+```
+
+albo od razu po silniku: `vid2cloud run nagranie.mp4 --out runs/<nazwa> --targets targets.json`
+(błąd skali nie psuje wyników silnika; config.json dostaje sekcję `"scale"`). W katalogu przebiegu
+powstają `scale_per_keyframe.csv` (pary), `scale_keyframes.csv` (f_k: obserwacje, A, B ± σ_u, globalny),
+`cloud_m_global.ply`, `cloud_m_kf_interp.ply`, `cloud_m_kf_mnk.ply` (metry, kolory z `cloud.ply`)
+i `scale.json` (parametry, sha256 targets.json, przesunięcia położeń klatek względem wariantu
+globalnego, ostrzeżenia). Bez `--overwrite` istniejące wyniki nie są nadpisywane. Algorytm:
+[docs/pseudocode/scale.md](docs/pseudocode/scale.md); decyzje: [docs/decisions.md](docs/decisions.md),
+wpisy z 2026-11-04.
+
 ## Silnik
 
 Upstream nie jest częścią tego repozytorium — dodaje się go jako submodule:

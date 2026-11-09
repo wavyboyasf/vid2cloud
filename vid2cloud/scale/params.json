@@ -1,0 +1,163 @@
+{
+  "sigma_obs": 0.04730970033456098,
+  "tau": 0.02052766018963663,
+  "tau2": 0.0004213848328611925,
+  "units": {
+    "sigma_obs": "ln f (≈ błąd względny)",
+    "tau": "ln f / sqrt(s)",
+    "tau2": "(ln f)^2 / s"
+  },
+  "date": "2026-11-04",
+  "source": "eval/scale_params.py, nagrania 21.09 (daleko_wolno, blisko_z_gory, daleko_szybko_pion)",
+  "runs": [
+    "runs/2026-09-21/adapter/daleko_wolno",
+    "runs/2026-09-21/adapter/blisko_z_gory",
+    "runs/2026-09-21/adapter/daleko_szybko_pion"
+  ],
+  "targets": {
+    "path": "data/2026-09-21/notes/targets.json",
+    "sha256": "0ecb19789fa8bbd03a143ea9c6f78a552df4efed22c4a28a50ab40cb888ddb1f"
+  },
+  "c_min": 1.5,
+  "formulas": {
+    "sigma_obs": "sigma_obs^2 = sum_k sum_j (ln f_kj - ln med_k)^2 / (n - m); klatki z >= 2 odcinkami, n reszt, m klatek, laczne z nagran",
+    "tau2": "tau^2 = sum (ln med_k' - ln med_k)^2 / sum (pts_k' - pts_k); kolejne w czasie klatki z obserwacjami w obrebie nagrania, laczne z nagran",
+    "f_kj": "factor_final = L / (s_k * d_canon_final), pary ze statusem ok; med_k = mediana f_kj klatki k"
+  },
+  "components": {
+    "sigma_obs": {
+      "n_residuals": 10,
+      "n_frames": 4,
+      "dof": 6,
+      "sum_sq": 0.013429246474475754,
+      "frames": [
+        {
+          "przebieg": "daleko_wolno",
+          "kf": 1,
+          "pts_s": 7.018255555555555,
+          "n": 2,
+          "f": [
+            1.532987231052228,
+            1.6562716223480145
+          ],
+          "med": 1.5946294267001213
+        },
+        {
+          "przebieg": "daleko_wolno",
+          "kf": 2,
+          "pts_s": 15.874777777777778,
+          "n": 2,
+          "f": [
+            1.6472919674421227,
+            1.532367173991571
+          ],
+          "med": 1.5898295707168468
+        },
+        {
+          "przebieg": "daleko_wolno",
+          "kf": 3,
+          "pts_s": 23.484733333333335,
+          "n": 4,
+          "f": [
+            1.7742165180264013,
+            1.7992191823348365,
+            1.6348709046590415,
+            1.7940259401109186
+          ],
+          "med": 1.7841212290686599
+        },
+        {
+          "przebieg": "daleko_szybko_pion",
+          "kf": 4,
+          "pts_s": 7.7055,
+          "n": 2,
+          "f": [
+            1.4127464811652497,
+            1.39788934918805
+          ],
+          "med": 1.4053179151766497
+        }
+      ]
+    },
+    "tau": {
+      "n_increments": 8,
+      "sum_du2": 0.029107686401954797,
+      "sum_dt": 69.07625555555555,
+      "increments": [
+        {
+          "przebieg": "daleko_wolno",
+          "kf": [
+            0,
+            1
+          ],
+          "dt_s": 7.009955555555555,
+          "du": 0.051962427853671084
+        },
+        {
+          "przebieg": "daleko_wolno",
+          "kf": [
+            1,
+            2
+          ],
+          "dt_s": 8.856522222222223,
+          "du": -0.003014552627036036
+        },
+        {
+          "przebieg": "daleko_wolno",
+          "kf": [
+            2,
+            3
+          ],
+          "dt_s": 7.6099555555555565,
+          "du": 0.11529916310423177
+        },
+        {
+          "przebieg": "blisko_z_gory",
+          "kf": [
+            0,
+            1
+          ],
+          "dt_s": 9.333333333333334,
+          "du": -0.024509156228939788
+        },
+        {
+          "przebieg": "daleko_szybko_pion",
+          "kf": [
+            2,
+            3
+          ],
+          "dt_s": 2.033333333333333,
+          "du": -0.018816314540041068
+        },
+        {
+          "przebieg": "daleko_szybko_pion",
+          "kf": [
+            3,
+            4
+          ],
+          "dt_s": 2.966666666666667,
+          "du": 0.057260761972268516
+        },
+        {
+          "przebieg": "daleko_szybko_pion",
+          "kf": [
+            4,
+            5
+          ],
+          "dt_s": 3.5665666666666676,
+          "du": -0.02742744164131135
+        },
+        {
+          "przebieg": "daleko_szybko_pion",
+          "kf": [
+            5,
+            17
+          ],
+          "dt_s": 27.69992222222222,
+          "du": -0.09010436229657676
+        }
+      ]
+    }
+  },
+  "notes": []
+}

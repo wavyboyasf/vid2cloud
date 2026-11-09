@@ -63,6 +63,8 @@ i czekają na swoją sesję (zasada 1 z CLAUDE.md).
       traktować N = 0 jawnie, a `save_reconstruction` przepuściłby wtedy całą klatkę (inf > 1,5).
       *05.10: `scale/lift.py::mean_confidence()` odmawia przy N = 0, a `eval/scale_per_keyframe.py`
       zapisuje wtedy powód w kolumnie `status`; w danych z 03.10 N = 0 nie wystąpiło.*
+      *04.11: `scale/cloud.py` (chmury w metrach) odtwarza regułę upstreamu także tu — C · (1/0) = inf > 1,5,
+      więc klatka z N = 0 weszłaby do `cloud_m_*.ply` cała, tak jak do `cloud.ply`.*
 - [ ] **Ścieżka relokalizacji w adapterze nie jest sprawdzona przebiegiem.** W pięciu przebiegach
       z 03.10 (`runs/2026-09-21/adapter/`) tracker ani razu nie zgubił śledzenia (`tracking_lost` = 0,
       `reloc_kf` = 0), więc zrzut klatki kluczowej dokładanej przez backend (zdarzenie „reloc”) jest
@@ -122,6 +124,16 @@ i czekają na swoją sesję (zasada 1 z CLAUDE.md).
       nigdy w env silnika) sprawdzić dwie rzeczy: czy pip nie rusza numpy 1.26.4 i co zostaje
       z chmury MASt3R-SLAM po przejściu przez open3d — kolory i normalne przechodzą, ale
       niestandardowe właściwości PLY (np. ufność per punkt) giną.
+      *04.11: aplikacja open3d nie potrzebuje — chmury w metrach (`vid2cloud scale`, `run --targets`)
+      zapisuje `export/plyio.py` (numpy, kolory zachowane), `docs/decisions.md` wpis z 2026-11-04.
+      Zostaje: `--apply` w `python -m vid2cloud.scale.estimate` nadal woła `scale_ply()` z open3d
+      (nieuruchomione). Przepiąć na plyio albo usunąć `--apply` — decyzja autora.*
+- [ ] **Docstring `scale/estimate.py` jest nieaktualny**: mówi, że długość w chmurze pochodzi z ręcznego
+      point-pickingu, a automatyczny pomiar „czeka na scale/lift.py” — od 05.10 jest lift, od 04.11
+      `scale/pipeline.py` woła `estimate_scale()` z pomiarami s_k·d_final. Poprawić opis (bez zmian w kodzie).
+- [ ] **`vid2cloud run --targets`: ścieżka błędu kroku skali** (status "error" w config.json, kod wyjścia 1)
+      sprawdzona tylko wywołaniem `run_scale_step()` na kopii katalogu z usuniętym zrzutem, nie przebiegiem
+      GPU; ścieżka „brak par” — `vid2cloud scale` na kopii `runs/s9_test` z pustym `aruco_keyframes.csv`.
 - [ ] **Wpis łaty skali w `targets.json` czeka na pomiar po sklejeniu** (środa 16.09).
       `data/own/targets_test.json` ma na razie wyłącznie odcinki kontrolne W1/W2 z 11.09 —
       nominału z `boards.json` tam nie wpisywać, wartość ma być zmierzona taśmą.
@@ -187,6 +199,21 @@ i czekają na swoją sesję (zasada 1 z CLAUDE.md).
 - [ ] **Ręczne kroki przed oceną kształtu** (`docs/instrukcja_cloudcompare.md`): TLS bez elementów
       ruchomych (`tls_koncertowa_1cm_static.ply`), pary punktów i macierze zgrubne dla trzech nagrań.
       Potem `bash eval/eval_all.sh` (30.10 tylko `--dry-run`: 20 chmur, wszystkie bez macierzy).
+      *09.11: TLS bez segmentacji — `tls_koncertowa_1cm_static.ply` to dowiązanie do `tls_koncertowa_1cm.ply`
+      (`docs/decisions.md`, wpis z 2026-11-09). Zostały pary punktów i macierze zgrubne.*
+- [ ] **Ocena wariantów skali w `eval/eval_all.sh`** (sesja S9, krok 9): 9 chmur
+      `runs/2026-09-21/adapter/<nagranie>/cloud_m_{global,kf_interp,kf_mnk}.ply` jest na liście
+      (`--dry-run` 04.11: 30 chmur, wszystkie bez macierzy i TLS), nie oceniane — czeka na ręczny krok
+      wyżej. Macierz zgrubna = macierz nagrania · diag(1/f_global) (`eval/coarse_metric.py`), więc par
+      nie klika się drugi raz. *05.11: chmury w metrach idą z `--metric` — gałąź h) ICP sztywne przy s = 1
+      zamiast g), `metric_scale_error` = s_icp − 1 (`docs/decisions.md`, wpis z 2026-11-05). Pola gałęzi h)
+      są tylko w `c2c_stats.json`, nie w `c2c_summary.csv` (kolumny podsumowania bez zmian).*
+- [ ] **ICP CloudCompare nie jest powtarzalny między przebiegami** (05.11, syntetyka z
+      `tests/test_eval_cloud.py`, ten sam katalog, te same pliki wejściowe): s_icp 1,499846 / 1,499821
+      (inne przebiegi: 1,499794, 1,499854, 1,499707), RMS C2C 0,010218–0,010223 m. SOR i kroki w numpy są
+      bajt w bajt powtarzalne; różnice zaczynają się od `-ICP` (losowanie `-RANDOM_SAMPLING_LIMIT 50000`).
+      Nie sprawdzono, czy CC 2.13.2 ma ziarno losowania w trybie wsadowym. Do decyzji autora, czy w ocenie
+      podawać rozrzut z kilku powtórzeń.
 - [ ] **Wymiary Sali Tronowej z TLS obejmują pomieszczenia sąsiednie** widziane przez drzwi
       (`runs/2026-09-21/eval_cc/tls/tls_tronowa_1cm_dims_top.png`) — prostopadłościan i percentyle
       1–99 to nie są wymiary sali. Gdyby były potrzebne: wyciąć salę ręcznie.

@@ -577,3 +577,175 @@ Remote Sens. 82) — M3C2, punkt odniesienia dla C2C; McNally i in. 2026 — ICP
 rekonstrukcji obrazowych, stała skala dla lidaru; Umeyama 1991 (Least-squares estimation of
 transformation parameters between two point patterns, IEEE TPAMI 13(4)) — przekształcenie
 przez podobieństwo z par punktów.
+
+---
+
+## 2026-11-04 — Skala osobno dla każdej klatki kluczowej: położenia jak ciąg poligonowy, warianty A i B, globalny do porównania
+
+**Co.** Moduł skali poprawia skalę osobno dla każdej klatki kluczowej (`vid2cloud scale <przebieg>`,
+`vid2cloud run --targets`; `vid2cloud/scale/pipeline.py`, pseudokod `docs/pseudocode/scale.md`).
+Obserwacją jest f_kj = factor_final pary (klatka k, odcinek j) ze statusem ok, wektor f_k ma trzy
+warianty: **A** — mediana f_kj w klatce z obserwacjami, log f interpolowany liniowo w czasie (pts_k)
+między nimi, stały przed pierwszą i za ostatnią; **B** — wyrównanie pośredniczące (wpis niżej);
+**globalny** — jedna liczba jak w wpisie z 2026-09-15 (`estimate_scale` z s_k·d_final po klatkach,
+mediana segmentów). Chmura jest składana z `kf_*_final.npz` regułą `save_reconstruction` upstreamu
+(`evaluate.py:47-70`: C/N > 1,5, k po kolei, piksele wiersz po wierszu); położenia klatek liczone są jak
+ciąg poligonowy, p_0 = f_0·t_0, p_k = p_(k−1) + ½(f_(k−1) + f_k)(t_k − t_(k−1)), a punkt klatki k to
+p_k + f_k·s_k·R_k·X. Odbudowa bez skalowania odtwarza `cloud.ply` trzech przebiegów z 03.10 co do punktu
+(564 165 / 992 966 / 2 736 139, maks. różnica 1,05e-6 / 1,21e-6 / 7,25e-7 jednostki), więc kolory są
+brane z `cloud.ply` po indeksie. Wariant globalny = `cloud.ply` × f (sprawdzone: ≤ 1,9e-6 m).
+
+**Dlaczego.** Wybór silnika w pracy (3.4, 4.2, 4.6) stoi na tym, że każda klatka kluczowa ma własną
+skalę Sim(3) — dryf skali jest zjawiskiem per klatka, a jeden współczynnik dla całej chmury zaciera
+dokładnie to, co moduł ma poprawiać. Położenia z uśrednieniem f sąsiednich klatek (reguła trapezów
+na wektorze t_k − t_(k−1)), bo samo f_k·t_k przesuwałoby klatkę o błąd skali całej drogi od kotwicy,
+a nie tylko ostatniego odcinka. Przy wszystkich f_k równych wzory sprowadzają się do wariantu globalnego
+(test `tests/test_scale_factors.py::test_methods_with_equal_factors_give_global_variant`).
+
+**Alternatywa: jeden współczynnik dla chmury.** Zostaje jako wariant `cloud_m_global.ply` — punkt
+odniesienia, względem którego `scale.json` podaje maks. przesunięcie położenia klatki dla A i B.
+
+Literatura: Strasdat, Montiel, Davison 2010 (Scale drift-aware large scale monocular SLAM, RSS);
+Murai, Dexheimer, Davison 2025 (MASt3R-SLAM, CVPR).
+
+---
+
+## 2026-11-04 — Metoda B: wyrównanie pośredniczące log f_k, σ_obs i τ zamrożone przed oceną kształtu
+
+**Co.** Niewiadome u_k = ln f_k, k = 0 … K−1. Równania obserwacyjne u_k = ln f_kj z wagą 1/σ_obs²
+i pseudoobserwacje u_(k+1) − u_k = 0 z wagą 1/(τ²·(pts_(k+1) − pts_k)) (błądzenie losowe log skali
+w czasie). u = (AᵀPA)⁻¹AᵀPl, błąd średni u_k = √diag((AᵀPA)⁻¹) przy σ0 a priori = 1; `scale.json`
+podaje też σ0 a posteriori = √(vᵀPv / r), r = liczba równań − K. f_k = exp(u_k), błąd względny ≈ σ_u.
+σ_obs i τ policzone **raz** (`eval/scale_params.py`, 04.11, przed oceną kształtu) z trzech nagrań 21.09
+i zapisane w `vid2cloud/scale/params.json` — to wartości domyślne każdego przebiegu, `--sigma-obs` /
+`--tau` je nadpisują, a `scale.json` zapisuje, które użyto:
+
+| wielkość | wzór | wartość | składniki |
+|---|---|---|---|
+| σ_obs | Σ (ln f_kj − ln med_k)² / (n − m), klatki z ≥ 2 odcinkami | **0,0473097** | n = 10 reszt, m = 4 klatki, 6 stopni swobody |
+| τ | √(Σ (Δ ln med)² / Σ Δt), kolejne klatki z obserwacjami w nagraniu | **0,0205277 /√s** (τ² = 4,21385·10⁻⁴ /s) | 8 przyrostów, Σ Δt = 69,08 s |
+
+med_k = mediana f_kj klatki k (ta sama co w metodzie A). Dzielnik n − m, bo każda klatka zużywa
+stopień swobody na swoją medianę; z dzielnikiem n wyszłoby σ_obs = 0,036646. Obie wielkości mają
+≥ 3 składniki. Przyrosty Δu liczone są z median klatek, więc obok τ²·Δt zawierają też szum obu median —
+estymator tego nie odejmuje.
+
+**Dlaczego.** Wyrównanie daje to, czego nie ma interpolacja: klatki bez obserwacji dostają wartość
+z rosnącym błędem średnim, klatki z obserwacjami są ściągane ku sąsiadom w miarę, jak blisko są w czasie,
+a σ0 a posteriori mówi, czy przyjęte σ_obs i τ pasują do danego przebiegu. Parametry zamrożone przed
+oceną kształtu z tego samego powodu co progi selekcji i parametry CloudCompare (wpisy z 2026-10-28
+i 2026-10-30): dobrane po wyniku byłyby dopasowaniem do danych.
+
+**Alternatywy.** (1) Tylko interpolacja — zostaje jako metoda A. (2) σ_obs per odcinek z powtarzalności
+kliknięć albo z sigma_mm — odrzucone na razie: obserwacją jest lift z pointmapy, nie kliknięcie, a rozrzut
+między odcinkami jednej klatki obejmuje oba źródła błędu. (3) τ i σ_obs estymowane w każdym przebiegu
+(np. VCE) — przy 1–4 obserwacjach na klatkę niestabilne.
+
+Literatura: Ghilani C. D. (2017) Adjustment Computations: Spatial Data Analysis, wyd. 6, Wiley —
+wyrównanie pośredniczące, wagi, macierz kowariancji.
+
+---
+
+## 2026-11-04 — PLY bez open3d (`export/plyio.py`), komenda `eval` usunięta z CLI
+
+**Co.** Odczyt i zapis PLY w numpy przeniesiony z `eval/plyio.py` do `vid2cloud/export/plyio.py`
+(w `eval/` został cienki import); chmury w metrach zapisuje ten moduł — float32 x y z + uchar RGB,
+jak upstream. `scale_ply()` z open3d w `scale/estimate.py` zostaje nietknięty i nieużywany przez
+aplikację. Komenda `vid2cloud eval` (zaślepka „not implemented”) usunięta — decyzja autora z 02.11;
+ocena kształtu jest w `eval/eval_cloud.py` + `eval/eval_all.sh`.
+
+**Dlaczego.** open3d nie ma w żadnym env, a instalacja w env silnika mogłaby ruszyć numpy; własny
+zapis jest kilkadziesiąt linii, ma test (`tests/test_eval_cloud.py`) i zachowuje każdą właściwość
+PLY, którą open3d by zgubił. `eval` w CLI obiecywał coś, czego CLI nie robi.
+
+**Alternatywa: `pip install open3d` w vid2cloud-tools.** Odrzucone — nowa zależność bez potrzeby
+(CLAUDE.md, zasada 8), a i tak potrzebna tylko do zapisu tablicy.
+
+Literatura: brak — decyzja inżynierska.
+
+---
+
+## 2026-11-04 — Test E w obrębie klatki kluczowej (decyzja autora 2026-10-30, dopisana 2026-11-04)
+
+**Co.** `eval/test_e.py` dostaje tabele w obrębie klatki kluczowej (`within_keyframe_pairs`): w każdej
+klatce z ≥ 2 odcinkami (planszami) wszystkie pary i < j, znak (y_j − y_i)·(x_j − x_i) — zgodna / niezgodna /
+remis jak w τ Kendalla — i odchylenie y od mediany klatki w %. Tabela 1b (21.09): x = z_mid_m, y = net_cr,
+osobno informacyjnie y = final; tabela 2b (VID_ODLEGLOSC): x = z_m, y = factor_net_median, wiersze
+z rozrzutem boków > 5 % z flagą, nieusunięte. Istniejące tabele i ρ łączny bez zmian (pliki bajt w bajt),
+ρ łączny wypisywany z dopiskiem „między klatkami kluczowymi — obciążony skalą klatki”.
+
+**Dlaczego.** Para odcinków z jednej klatki dzieli s_k i ten sam przebieg sieci, więc różnica ich
+współczynników zależy od głębokości, a nie od skali klatki; między klatkami skala klatki dominuje.
+Liczby podane przez autora: net_cr w daleko_szybko_pion rozrzut 44 % ((max − min)/min = 44,5 %;
+w konwencji `estimate.py`, (max − min)/mediana — 38,3 %); w VID_ODLEGLOSC net_cr planszy ID 10 spada
+z 1,08 do 0,63, przy final 1,08–1,15.
+
+**Alternatywa: ρ łączny jako jedyna miara.** Zostaje, oznaczony jako obciążony skalą klatki.
+
+Literatura: Kendall M. G. (1938), A new measure of rank correlation, Biometrika 30(1–2), 81–93.
+
+---
+
+## 2026-11-05 — Ocena chmur w metrach: gałąź „sztywna, s = 1” zamiast przeskalowania przez s_mod
+
+**Co.** `eval/eval_cloud.py --metric` (chmury `cloud_m_*.ply` z `vid2cloud scale`; `eval/eval_all.sh`
+uruchamia je z tą flagą) zastępuje gałąź g) gałęzią h): ta sama chmura po SOR co w gałęzi głównej,
+start z macierzy zgrubnej **bez członu skali** (R, t z `similarity_parts(M_c)`, s = 1;
+`rigid_start()`), ICP sztywne z parametrami `icp_rigid` z `eval_config.json`, C2C, te same
+statystyki i progi. Zapis: `c2c_rigid_s1.ply` i pola `rigid_s1_{mean,rms,p95,frac_5cm,frac_10cm,frac_20cm}`
+w `c2c_stats.json`, obok `metric_scale_error` = s_icp − 1 z gałęzi głównej (błąd skali chmury w metrach).
+`--metric` zastępuje `--no-scale-check` z 04.11 i wyklucza `--scale-csv`. Dla chmur w jednostkach sieci
+kroki a)–g) bez zmian. Sprawdzone przez odtworzenie nagranych wyjść CloudCompare: 23/23 plików
+syntetycznego przypadku identycznych poza znacznikami czasu, te same argumenty wywołań CC. Wprost
+bajt w bajt się nie da, bo ICP CloudCompare z `-RANDOM_SAMPLING_LIMIT` daje inny wynik przy każdym
+przebiegu (`docs/TODO.md`). Syntetyka (`tests/test_eval_cloud.py::test_synthetic_metric_branch_rigid_s1`,
+σ = 1 cm): przy braku błędu skali gałąź s = 1 daje RMS 0,01022 m, przy chmurze, której do TLS brakuje
+skali 1,05, RMS 0,08362 m przy s_icp 1,04981 (gałąź główna w obu przypadkach 0,0102 m).
+
+**Dlaczego.** Chmura w metrach ma być oceniana w skali, którą dał jej moduł skali; ICP ze skalą tę skalę
+poprawia, więc w gałęzi głównej błąd skali modułu przechodzi do s_icp i znika z RMS. Gałąź s = 1 jest
+rejestracją z 6 parametrami (obrót + przesunięcie, procedura z 2.7 pracy), więc błąd skali zostaje
+w odległościach. Start z macierzy zgrubnej, a nie z wyniku ICP ze skalą, żeby gałąź nie zależała od
+rozwiązania z dopasowaną skalą.
+
+**Alternatywa: tylko ICP ze skalą.** Odrzucona — ukrywa błąd skali modułu; zostaje jako gałąź główna,
+z której pochodzi `metric_scale_error`.
+
+Literatura: brak — decyzja inżynierska (procedura z 2.7: rejestracja z 6 parametrami).
+
+---
+
+## 2026-11-05 — Dzielnik σ_obs: n − m potwierdzony przez autora
+
+**Co.** σ_obs metody B (wpis z 2026-11-04, `vid2cloud/scale/params.json`) zostaje z dzielnikiem n − m
+(10 reszt, 4 klatki, 6 stopni swobody): σ_obs = 0,0473097. Wartość z dzielnikiem n (0,036646) nie jest
+używana. `params.json` bez zmian.
+
+**Dlaczego.** Decyzja autora z 2026-11-05: to estymator nieobciążony, jak m0² = vᵀPv / (n − u)
+w wyrównaniu — każda klatka zużywa jeden stopień swobody na swoją medianę (u = m niewiadomych).
+
+**Alternatywa: dzielnik n.** Odrzucona — obciążony w dół, najmocniej przy parach (σ zaniżone o √2).
+
+Literatura: Ghilani C. D. (2017) Adjustment Computations: Spatial Data Analysis, wyd. 6, Wiley.
+
+---
+
+## 2026-11-09 — TLS bez usuwania elementów ruchomych
+
+**Co.** Referencją oceny kształtu jest cały TLS sali koncertowej po podpróbkowaniu do 1 cm, razem
+z meblami, pulpitami i wyposażeniem sceny. Ręcznej segmentacji z kroku a) `docs/instrukcja_cloudcompare.md`
+nie ma. `runs/2026-09-21/eval_cc/tls/tls_koncertowa_1cm_static.ply`, którego domyślnie używają
+`eval/eval_cloud.py` i `eval/eval_all.sh`, to dowiązanie symboliczne do `tls_koncertowa_1cm.ply`
+(nazwa w kodzie bez zmian, ten sam plik).
+
+**Dlaczego.** C2C liczone jest od rekonstrukcji do TLS (wpis z 2026-10-30), więc usunięcie mebli
+tylko z TLS zwiększałoby odległości punktów rekonstrukcji leżących na meblach, które nie zmieniły
+położenia między 23.02 a 21.09 — ich najbliższym punktem stałby się dalszy fragment ściany czy podłogi.
+Meble przestawione dają duże odległości niezależnie od tego, czy są w TLS, więc usunięcie ich
+z referencji tego nie usuwa.
+
+**Alternatywa: strefy wykluczenia w układzie TLS stosowane do obu chmur** (te same prostopadłościany
+albo wieloboki wycinane z TLS i z rekonstrukcji po dopasowaniu). Odrzucona przed zamrożeniem liczb
+(15.11) — do dalszych prac.
+
+Literatura: brak — decyzja inżynierska.

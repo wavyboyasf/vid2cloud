@@ -1,17 +1,18 @@
 # Algorytm 5. Ocena kształtu chmury względem referencji
 
-Moduły: `eval/coarse_from_pairs.py` (krok 0), `eval/eval_cloud.py` (kroki a–g),
+Moduły: `eval/coarse_from_pairs.py` (krok 0), `eval/eval_cloud.py` (kroki a–h),
 `eval/eval_all.sh` (wszystkie chmury). SOR, ICP i C2C liczy CloudCompare 2.13.2 (`eval/cc.sh`).
 
 **Wejście:** chmura rekonstrukcji X = {x_i} (jednostki chmury) nagrania r; referencja TLS
-Y = {y_j} [m] (podpróbkowana do 1 cm, bez elementów ruchomych); pary punktów wskazane ręcznie
+Y = {y_j} [m] (podpróbkowana do 1 cm, cały skan z meblami); pary punktów wskazane ręcznie
 (p_k ↔ q_k), k = 1, …, m, m ≥ 3; chmura bazowa nagrania X_r (przebieg adaptera); opcjonalnie
 współczynniki taśmy f_l (factor_final) tego przebiegu. Parametry ustalone przed wynikami:
 percentyle (1, 99), margines δ = 0,20 m, SOR (k = 6, σ = 1), ICP (Δ = 10⁻⁶, 50 000 próbek,
 nakrycie 90 %), progi τ = (0,05; 0,10; 0,20) m.
 
 **Wyjście:** odległości d_i; n, średnia, mediana, RMS, p95 i odsetki d_i ≤ τ; skala s_icp;
-RMS ICP; s_mod, s_mod / s_icp − 1, RMS C2C w skali s_mod.
+RMS ICP; s_mod, s_mod / s_icp − 1, RMS C2C w skali s_mod; dla chmury w metrach zamiast tego
+s_icp − 1 i statystyki d po rejestracji sztywnej przy s = 1.
 
 0. **Zgrubnie, raz na nagranie** (Umeyama): (s_c, R_c, t_c) ← argmin Σ_k ‖q_k − (s R p_k + t)‖²;
    M_c ← [s_c R_c | t_c]; odchyłki e_k ← ‖M_c p_k − q_k‖ i ich RMS.
@@ -30,3 +31,7 @@ RMS ICP; s_mod, s_mod / s_icp − 1, RMS C2C w skali s_mod.
    1. s_mod ← mediana_l f_l; zapisz s_mod i (s_mod / s_icp − 1) · 100 %.
    2. M = [s_icp R | t] → T₀ ← [R | t]; Z ← { T₀ (s_mod · M_c⁻¹ x) : x ∈ X‴ }.
    3. ICP sztywne Z → Y_B (jak krok 4, bez skali); C2C jak krok 5; RMS d — kształt w skali z taśmy.
+8. **(h) Jeśli** chmura jest w metrach (zamiast g):
+   1. e_s ← s_icp − 1 (błąd skali chmury w metrach).
+   2. M_c = [s_c R_c | t_c] → T₀ ← [R_c | t_c]; Z ← { T₀ (M_c⁻¹ x) : x ∈ X‴ } (skala chmury bez zmian).
+   3. ICP sztywne Z → Y_B (jak krok 4, bez skali); C2C jak krok 5; statystyki i progi jak krok 6.

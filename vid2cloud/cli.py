@@ -1,15 +1,17 @@
 """Interfejs wiersza poleceń vid2cloud.
 
 Komendy odpowiadające etapom pracy z materiałem:
-    run     — pełny przebieg: wideo -> chmura punktów (opcjonalnie tylko klatki z listy)
+    run     — pełny przebieg: wideo -> chmura punktów (opcjonalnie tylko klatki z listy);
+              z --targets na końcu ten sam krok skali co `scale`
     quality — przebieg wstępny bez GPU: miary jakości każdej klatki, wykres ostrości
     select  — listy klatek (stały krok, argmax ostrości w oknach) z quality.csv
-    scale   — nadanie skali metrycznej gotowej chmurze na podstawie wzorców
-    eval    — porównanie wyniku z referencją i zestawienie metryk
+    scale   — skala metryczna osobno dla każdej klatki kluczowej gotowego przebiegu
+              (dwie metody + wariant globalny), chmury w metrach
 
-`run` działa w env mast3r-slam (vid2cloud/run.py); `quality` i `select` w env vid2cloud-tools
-(`python -m vid2cloud.cli ...`, vid2cloud/input/quality.py). `scale` i `eval` na razie tylko
-wypisują swoje argumenty i "not implemented" — doprecyzuje je sesja, która je implementuje.
+`run` działa w env mast3r-slam (vid2cloud/run.py); `quality`, `select` i `scale` w env
+vid2cloud-tools (`python -m vid2cloud.cli ...`; vid2cloud/input/quality.py,
+vid2cloud/scale/pipeline.py). Ocena względem TLS jest w eval/ (eval_cloud.py, eval_all.sh) —
+komenda `eval` została usunięta 2026-11-04 (decyzja autora z 02.11).
 """
 
 from pathlib import Path
@@ -17,19 +19,14 @@ from typing import Annotated, Optional
 
 import typer
 
+from vid2cloud.scale.lift import C_MIN
+
 app = typer.Typer(
     name="vid2cloud",
     help="Gęsta chmura punktów z wideo, klatka po klatce.",
     add_completion=False,
     no_args_is_help=True,
 )
-
-
-def _not_implemented(command: str, **kwargs: object) -> None:
-    """Wypisuje nazwę komendy i przekazane argumenty. Miejsce na przyszłą logikę."""
-    typer.echo(f"{command}: not implemented")
-    for key, value in kwargs.items():
-        typer.echo(f"  {key} = {value!r}")
 
 
 @app.command()
@@ -48,21 +45,40 @@ def run(
         help="Plik z listą indeksów klatek (jeden w linii, rosnąco). Dekodowane są wszystkie klatki, "
              "do silnika trafiają tylko te z listy; log.csv dostaje kolumnę fed.",
     )] = None,
+    targets: Annotated[Optional[Path], typer.Option(
+        "--targets", "-t",
+        help="targets.json ze zmierzonymi odcinkami: po zakończeniu silnika skala osobno dla każdej klatki "
+             "kluczowej (jak `vid2cloud scale`). Błąd skali nie psuje wyników silnika, ale kod wyjścia ≠ 0.",
+    )] = None,
 ) -> None:
     """Pełny przebieg MASt3R-SLAM: chmura, zrzuty klatek kluczowych, historia póz Sim(3), log per klatka.
 
-    Uruchamiać w env `mast3r-slam`. Bez --frames każda klatka idzie do silnika.
+    Uruchamiać w env `mast3r-slam`. Bez --frames każda klatka idzie do silnika. Bez --targets
+    przebieg jak dotąd (bez sekcji "scale" w config.json).
     """
     from vid2cloud.run import run_video  # lokalnie: torch i upstream tylko dla tej komendy
 
     record = run_video(video, out, config_path=config, single_thread=single_thread, max_frames=max_frames,
-                       frames=frames)
+                       frames=frames, targets=targets)
     times, results = record["times_s"], record["results"]
     fed = f" ({results['n_frames_fed']} podanych do silnika)" if "n_frames_fed" in results else ""
     typer.echo(
         f"gotowe: {results['n_frames']} klatek{fed}, {results['n_keyframes']} klatek kluczowych, "
         f"{results['n_points_cloud']} punktów, {times['wall_total']:.0f} s -> {record['out']}"
     )
+    if "scale" in record:
+        sc = record["scale"]
+        typer.echo(f"skala: {sc['status']}  ({times.get('scale', 0):.1f} s)"
+                   + (f" — {sc['message']}" if sc.get("message") else ""))
+        scale_json = sc.get("files", {}).get("scale_json")
+        if scale_json:
+            import json
+
+            from vid2cloud.scale.pipeline import format_report
+
+            typer.echo(format_report(json.loads(Path(scale_json).read_text(encoding="utf-8"))))
+        if sc["status"] == "error":
+            raise typer.Exit(code=1)
 
 
 @app.command()
@@ -98,22 +114,30 @@ def select(
 
 @app.command()
 def scale(
-    cloud: Annotated[Path, typer.Argument(help="Chmura punktów do przeskalowania (PLY).")],
-    targets: Annotated[Path, typer.Option("--targets", "-t", help="Plik targets.json ze zmierzonymi wzorcami.")] = Path("targets.json"),
-    out: Annotated[Optional[Path], typer.Option("--out", "-o", help="Chmura wyjściowa; domyślnie obok wejściowej.")] = None,
+    run_dir: Annotated[Path, typer.Argument(help="Katalog gotowego przebiegu (runs/<nazwa>, single_thread).")],
+    targets: Annotated[Path, typer.Option("--targets", "-t", help="targets.json ze zmierzonymi odcinkami (mm).")],
+    c_min: Annotated[float, typer.Option("--c-min", help="Próg średniej ufności pikseli liftu.")] = C_MIN,
+    sigma_obs: Annotated[Optional[float], typer.Option(
+        "--sigma-obs", help="σ_obs metody B (ln f); domyślnie zamrożone z vid2cloud/scale/params.json.")] = None,
+    tau: Annotated[Optional[float], typer.Option(
+        "--tau", help="τ metody B (ln f / √s); domyślnie zamrożone z vid2cloud/scale/params.json.")] = None,
+    overwrite: Annotated[bool, typer.Option("--overwrite", help="Nadpisz scale.json, scale_keyframes.csv, cloud_m_*.ply.")] = False,
 ) -> None:
-    """Nadaje chmurze skalę metryczną na podstawie fizycznych wzorców z targets.json."""
-    _not_implemented("scale", cloud=cloud, targets=targets, out=out)
+    """Skala osobno dla każdej klatki kluczowej: f_k metodą A (interpolacja) i B (MNK) + wariant globalny.
 
+    Zapisuje w katalogu przebiegu scale_per_keyframe.csv, scale_keyframes.csv, cloud_m_global.ply,
+    cloud_m_kf_interp.ply, cloud_m_kf_mnk.ply i scale.json; wypisuje tabelę f_k. Bez GPU —
+    env `vid2cloud-tools`: `python -m vid2cloud.cli scale <katalog> --targets <json>`.
+    """
+    from vid2cloud.scale.pipeline import format_report, scale_run
 
-@app.command("eval")
-def eval_(
-    run_dir: Annotated[Path, typer.Argument(help="Katalog przebiegu do oceny (runs/<nazwa>).")],
-    reference: Annotated[Optional[Path], typer.Option("--reference", "-r", help="Chmura referencyjna (lidar / Metashape).")] = None,
-    out: Annotated[Optional[Path], typer.Option("--out", "-o", help="Plik na zestawienie metryk.")] = None,
-) -> None:
-    """Porównuje wynik przebiegu z referencją i zapisuje zestawienie metryk."""
-    _not_implemented("eval", run_dir=run_dir, reference=reference, out=out)
+    try:
+        record = scale_run(run_dir, targets, c_min=c_min, sigma_obs=sigma_obs, tau=tau, overwrite=overwrite,
+                           log=typer.echo)
+    except (FileExistsError, FileNotFoundError, ValueError) as exc:
+        typer.echo(f"błąd: {exc}", err=True)
+        raise typer.Exit(code=1)
+    typer.echo(format_report(record))
 
 
 if __name__ == "__main__":
