@@ -117,6 +117,20 @@ def test_metric_excludes_scale_csv(tmp_path, capsys):
                  "--scale-csv", str(tmp_path / "s.csv")])
 
 
+def test_load_crop_existing_only(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        ec.load_crop("brak", tmp_path)
+    (tmp_path / "crop").mkdir()
+    (tmp_path / "crop" / "rec.json").write_text('{"min": [0, 0, 0], "max": [1, 1, 1]}', encoding="utf-8")
+    assert ec.load_crop("rec", tmp_path) == {"min": [0, 0, 0], "max": [1, 1, 1]}
+
+
+def test_crop_name_excludes_crop_source(tmp_path):
+    with pytest.raises(SystemExit):
+        ec.main([str(tmp_path / "c.ply"), "--name", "x", "--out", str(tmp_path / "o"), "--crop-name", "rec",
+                 "--crop-source", str(tmp_path / "c.ply")])
+
+
 def test_s_mod_median_of_factor_final(tmp_path):
     p = tmp_path / "scale_per_keyframe.csv"
     p.write_text("kf,factor_final,status\n0,1.5,ok\n1,,x\n2,1.7,ok\n3,1.6,ok\n", encoding="utf-8")
@@ -287,3 +301,14 @@ def test_synthetic_metric_branch_rigid_s1(tmp_path, s_err):
         assert r["rigid_s1_rms"] > 3 * SIGMA and r["rigid_s1_rms"] > 2 * r["c2c"]["rms"]
     c2c = read_ply(out / "c2c_rigid_s1.ply")
     assert len(c2c) == r["n_after_sor"] == r["rigid_s1_c2c"]["n"]
+
+    # --crop-name: inna nazwa, prostopadłościan i TLS po wycięciu nagrania "syn_m" (bez liczenia od nowa)
+    out2 = tmp_path / "out2"
+    assert ec.main([str(cloud), "--name", "syn_m_wariant", "--out", str(out2), "--eval-cc", str(tmp_path / "ecc"),
+                    "--tls", str(tmp_path / "tls.ply"), "--coarse", str(coarse), "--crop-name", "syn_m",
+                    "--metric"]) == 0
+    r2 = json.loads((out2 / "c2c_stats.json").read_text(encoding="utf-8"))
+    assert r2["crop_name"] == "syn_m" and r2["crop"] == r["crop"] and r2["tls_crop"] == r["tls_crop"]
+    assert r2["n_crop"] == r["n_crop"] and r2["n_after_sor"] == r["n_after_sor"]
+    assert not (tmp_path / "ecc" / "crop" / "syn_m_wariant.json").exists()
+    assert "crop_name" not in r

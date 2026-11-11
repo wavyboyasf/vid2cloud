@@ -25,6 +25,12 @@ Kroki (parametry z eval/eval_config.json, ustalone przed wynikami):
 Bez `--metric` (chmury w jednostkach sieci) kroki a)–g) i pliki wyjściowe są takie jak przed
 dodaniem h).
 
+`--crop-name <nagranie>`: prostopadłościan b) i TLS po wycięciu brane z istniejącego
+eval_cc/crop/<nagranie>.json (policzonego dla nagrania z jego cloud.ply) zamiast liczenia z
+--crop-source. Prostopadłościan jest w układzie TLS, więc pasuje do każdej chmury nagrania po jej
+własnej macierzy zgrubnej — `eval_all.sh` używa tego dla chmur w metrach z katalogów wariantów
+(np. <nagranie>_kf050), które mają inne f_global, a więc inną macierz zgrubną niż nagranie.
+
 Wyjście w <out>: c2c_stats.json, c2c.ply (chmura po d) z polem odległości C2C — do zrzutów
 z legendą w GUI), c2c_smod.ply (gałąź g), c2c_rigid_s1.ply (gałąź h), cc_commands.txt, cc_*.log,
 pliki pośrednie; jeden wiersz w eval_cc/c2c_summary.csv (zastępowany przy ponownym przeliczeniu
@@ -234,6 +240,14 @@ def get_crop(name: str, eval_cc: Path, crop_source: Path, M_c: np.ndarray, coars
     return box
 
 
+def load_crop(name: str, eval_cc: Path) -> dict:
+    """Istniejący prostopadłościan nagrania (eval_cc/crop/<name>.json); brak to błąd, nie liczenie od nowa."""
+    path = eval_cc / "crop" / f"{name}.json"
+    if not path.exists():
+        raise FileNotFoundError(f"{path}: brak prostopadłościanu nagrania — najpierw oceń chmurę nagrania")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
 def get_tls_crop(name: str, eval_cc: Path, tls: Path, box: dict) -> tuple[Path, dict]:
     ply = eval_cc / "crop" / f"{name}_tls.ply"
     meta_path = eval_cc / "crop" / f"{name}_tls.json"
@@ -256,7 +270,8 @@ def get_tls_crop(name: str, eval_cc: Path, tls: Path, box: dict) -> tuple[Path, 
 
 
 def evaluate(cloud: Path, name: str, out: Path, *, tls: Path, coarse: Path, crop_source: Path, eval_cc: Path,
-             summary: Path, scale_csv: Path | None, cfg: dict, metric: bool = False) -> dict:
+             summary: Path, scale_csv: Path | None, cfg: dict, metric: bool = False,
+             crop_name: str | None = None) -> dict:
     out.mkdir(parents=True, exist_ok=True)
     for stale in out.glob("*REGISTRATION_MATRIX*.txt"):  # resztki przerwanego przebiegu
         stale.unlink()
@@ -266,8 +281,12 @@ def evaluate(cloud: Path, name: str, out: Path, *, tls: Path, coarse: Path, crop
 
     # a) zgrubne dopasowanie, b) prostopadłościan
     M_c = read_matrix(coarse)
-    box = get_crop(name, eval_cc, crop_source, M_c, coarse, cfg)
-    tls_crop, tls_meta = get_tls_crop(name, eval_cc, tls, box)
+    if crop_name is None:
+        box = get_crop(name, eval_cc, crop_source, M_c, coarse, cfg)
+        tls_crop, tls_meta = get_tls_crop(name, eval_cc, tls, box)
+    else:  # prostopadłościan nagrania (układ TLS) dla chmury z inną macierzą zgrubną
+        box = load_crop(crop_name, eval_cc)
+        tls_crop, tls_meta = get_tls_crop(crop_name, eval_cc, tls, box)
     v = read_ply(cloud)
     P = transform(M_c, xyz(v))
     keep = in_box(P, box["min"], box["max"])
@@ -299,6 +318,8 @@ def evaluate(cloud: Path, name: str, out: Path, *, tls: Path, coarse: Path, crop
         "icp_rms_cc": icp["rms"], "icp_n_final": icp["n_final"],
         "c2c": stats, "config": {k: cfg[k] for k in cfg if not k.startswith("_")},
     }
+    if crop_name is not None:
+        result["crop_name"] = crop_name
 
     # g) skala z taśmy
     result["scale_csv"] = str(scale_csv) if scale_csv else None
@@ -392,6 +413,8 @@ def main(argv=None) -> int:
     ap.add_argument("--coarse", type=Path, help="domyślnie <eval-cc>/coarse/<nagranie>.txt")
     ap.add_argument("--crop-source", type=Path,
                     help="chmura, z której liczony jest prostopadłościan (domyślnie runs/2026-09-21/adapter/<nagranie>/cloud.ply)")
+    ap.add_argument("--crop-name", help="prostopadłościan i TLS po wycięciu z istniejącego eval_cc/crop/<crop-name>.json "
+                                        "(nagranie) zamiast liczenia z --crop-source")
     ap.add_argument("--scale-csv", type=Path, help="domyślnie scale_per_keyframe.csv obok chmury")
     ap.add_argument("--metric", action="store_true",
                     help="chmura już w metrach (cloud_m_*.ply z vid2cloud scale): zamiast g) gałąź h) — ICP sztywne "
@@ -408,13 +431,18 @@ def main(argv=None) -> int:
         ap.error("--metric wyklucza --scale-csv (gałąź g przeskalowałaby chmurę w metrach drugi raz)")
     scale_csv = None if args.metric else (args.scale_csv or args.cloud.parent / "scale_per_keyframe.csv")
     summary = args.summary or args.eval_cc / "c2c_summary.csv"
-    for label, p in (("chmura", args.cloud), ("TLS", tls), ("macierz zgrubna", coarse), ("źródło prostopadłościanu", crop_source)):
+    if args.crop_name and args.crop_source:
+        ap.error("--crop-name wyklucza --crop-source")
+    box_input = (("prostopadłościan nagrania", args.eval_cc / "crop" / f"{args.crop_name}.json") if args.crop_name
+                 else ("źródło prostopadłościanu", crop_source))
+    for label, p in (("chmura", args.cloud), ("TLS", tls), ("macierz zgrubna", coarse), box_input):
         if not p.exists():
             print(f"brak: {label} {p}")
             return 2
     t0 = time.time()
     r = evaluate(args.cloud, args.name, args.out, tls=tls, coarse=coarse, crop_source=crop_source,
-                 eval_cc=args.eval_cc, summary=summary, scale_csv=scale_csv, cfg=cfg, metric=args.metric)
+                 eval_cc=args.eval_cc, summary=summary, scale_csv=scale_csv, cfg=cfg, metric=args.metric,
+                 crop_name=args.crop_name)
     c = r["c2c"]
     print(f"{args.cloud} ({args.name}): {r['n_cloud']} pkt, po wycięciu {r['n_crop']}, po SOR {r['n_after_sor']}")
     print(f"  s_coarse {r['s_coarse']:.6f}, s_icp {r['s_icp']:.6f}, RMS ICP (CC) {r['icp_rms_cc']:.4f}")

@@ -72,6 +72,18 @@ i czekają na swoją sesję (zasada 1 z CLAUDE.md).
 - [ ] **Bez single_thread historia póz jest próbkowana co klatkę** (`poses_history.csv`, zdarzenie
       `backend_done`): kilka optymalizacji między dwiema klatkami zlewa się w jeden wiersz, a moment
       zapisu zależy od tempa GPU. Do rozdziału o s_k(t) brać przebiegi z `--single-thread`.
+- [ ] **daleko_wolno przy match_frac_thresh 0,7 przerwany: CUDA out of memory w backendzie** (S10, 10.11,
+      `runs/2026-09-21/adapter/daleko_wolno_kf070/stdout.log`): `global_opt.py:107` (`prep_two_way_edges`,
+      próba alokacji 1,41 GiB, wolne 1,36 GiB z 15,47) przy 215. klatce kluczowej, klatka 884 z 987. Brak
+      `cloud.ply` i zrzutów końcowych, config.json ze statusem "running". Nie powtarzano (progi ustalone przed
+      uruchomieniem, wpis z 2026-11-10). Komunikat torcha podsuwa `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`
+      — to zmiana środowiska przebiegu; czy powtórzyć z nią — decyzja autora. Bufor 512 klatek kluczowych
+      (`frame.py:221`) nie został osiągnięty.
+- [ ] **`runs/2026-09-21/adapter/run_adapter.sh` (03.10) zapisuje w logu zły kod wyjścia**: w
+      `echo "... $(date -Iseconds) kod $?"` podstawienie `$(date)` wykonuje się przed `$?` i nadpisuje go
+      (sprawdzone 10.11), więc „kod” w `batch.log` to zawsze 0. Przebiegi z 03.10 mają status "done"
+      w config.json, więc nic nie zginęło. `run_kf_sensitivity.sh` (10.11) poprawiony po tym, jak
+      zgłosił „kod 0” przy przerwanym daleko_wolno kf070.
 
 ## Wejście
 

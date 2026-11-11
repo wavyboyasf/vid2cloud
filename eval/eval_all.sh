@@ -17,6 +17,9 @@
 #                                                 z cloud_m_global.ply (= f_global · cloud.ply, więc po złożeniu
 #                                                 ten sam co nagrania); --metric: zamiast g) gałąź h)
 #                                                 (ICP sztywne przy s = 1, metric_scale_error = s_icp − 1)
+#                                                 katalog wariantu (np. <nagranie>_kf050, inne f_global):
+#                                                 nazwa = <katalog>_m_<wariant>, prostopadłościan nagrania
+#                                                 z eval_cc/crop/<nagranie>.json (--crop-name)
 # Wyniki: runs/2026-09-21/eval_cc/c2c/<źródło>/<…>/ + jeden wiersz na chmurę w eval_cc/c2c_summary.csv.
 set -u
 REPO=/home/wavy/dev/vid2cloud
@@ -68,14 +71,23 @@ evaluate() {  # chmura nazwa out [crop_source]
 }
 
 evaluate_metric() {  # katalog_przebiegu nagranie wariant
-    local d=$1 rec=$2 v=$3
-    local cloud=$d/cloud_m_$v.ply name=${rec}_m_$v out=$ECC/c2c/adapter_m/$(basename "$d")/$v
-    local base=$ECC/coarse/$rec.txt coarse=$ECC/coarse/${rec}_m_$v.txt
+    local d=$1 rec=$2 v=$3 run
+    run=$(basename "$d")
+    # Katalog nagrania (E1): nazwa <nagranie>_m_<wariant>, prostopadłościan z cloud_m_global.ply (= f · cloud.ply).
+    # Katalog wariantu (np. _kf050): własna nazwa i macierz (inne f_global), prostopadłościan nagrania.
+    local cloud=$d/cloud_m_$v.ply name=${run}_m_$v out=$ECC/c2c/adapter_m/$run/$v
+    local base=$ECC/coarse/$rec.txt coarse=$ECC/coarse/${run}_m_$v.txt
+    local crop=(--crop-source "$d/cloud_m_global.ply")
+    [ "$run" = "$rec" ] || crop=(--crop-name "$rec")
     local missing=""
     [ -f "$base" ] || missing="$missing macierz:eval_cc/coarse/$rec.txt"
     [ -f "$TLS" ] || missing="$missing TLS:${TLS#$REPO/}"
     [ -f "$d/scale.json" ] || missing="$missing scale.json"
-    [ -f "$d/cloud_m_global.ply" ] || missing="$missing prostopadłościan:${d#$REPO/}/cloud_m_global.ply"
+    if [ "$run" = "$rec" ]; then
+        [ -f "$d/cloud_m_global.ply" ] || missing="$missing prostopadłościan:${d#$REPO/}/cloud_m_global.ply"
+    else
+        [ -f "$ECC/crop/$rec.json" ] || missing="$missing prostopadłościan:eval_cc/crop/$rec.json"
+    fi
     local state="gotowa"
     [ -f "$out/c2c_stats.json" ] && state="policzona"
     [ -n "$missing" ] && state="brak:$missing"
@@ -87,7 +99,7 @@ evaluate_metric() {  # katalog_przebiegu nagranie wariant
     "$PY" eval/coarse_metric.py "$base" "$d/scale.json" "$coarse" || return
     mkdir -p "$out"
     "$PY" eval/eval_cloud.py "$cloud" --name "$name" --out "$out" --coarse "$coarse" \
-        --crop-source "$d/cloud_m_global.ply" --metric > "$out/eval_cloud.log" 2>&1
+        "${crop[@]}" --metric > "$out/eval_cloud.log" 2>&1
     local code=$?
     echo "     kod $code  $(tail -1 "$out/eval_cloud.log")"
 }

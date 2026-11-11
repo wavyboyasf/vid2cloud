@@ -749,3 +749,57 @@ albo wieloboki wycinane z TLS i z rekonstrukcji po dopasowaniu). Odrzucona przed
 (15.11) — do dalszych prac.
 
 Literatura: brak — decyzja inżynierska.
+
+---
+
+## 2026-11-10 — Więcej klatek kluczowych: analiza wrażliwości (po E1)
+
+**Co.** Próg nowej klatki kluczowej `tracking.match_frac_thresh` = 0,5 i 0,7 zamiast 0,333
+(`third_party/mast3r-slam/config/base.yaml`). Konfiguracje `configs/mast3r_kf050.yaml`
+i `configs/mast3r_kf070.yaml` to kopie `base.yaml` różniące się tylko tą wartością; upstream bez
+zmian. Te same trzy nagrania z 21.09 (daleko_wolno, blisko_z_gory, daleko_szybko_pion),
+`vid2cloud run --targets` z single_thread jak 03.10, wyniki w
+`runs/2026-09-21/adapter/<nagranie>_kf050` i `_kf070`. Reszta konfiguracji silnika, moduł skali
+(σ_obs, τ z `params.json`) i ocena kształtu (`eval_config.json`, macierze zgrubne i prostopadłościany
+nagrań) — bez zmian.
+
+**Dlaczego.** Po E1 (9.11) najgorszy kształt jest w nagraniu z najmniejszą liczbą klatek kluczowych:
+daleko_wolno — 4 klatki kluczowe, RMS C2C 13,0 cm; daleko_szybko_pion — 20, 7,1 cm. Nowa klatka
+kluczowa powstaje dopiero, gdy min(udział ważnych dopasowań, udział unikalnych pikseli klatki
+kluczowej) spadnie poniżej progu (`mast3r_slam/tracker.py:104-110`), a do tego czasu każda śledzona
+klatka jest uśredniana w pointmapę bieżącej klatki kluczowej (`tracker.py:98-99`, `filtering_mode:
+weighted_pointmap`). Przy wolnym ruchu klatka kluczowa uśrednia więc klatki z długiego odcinka trasy.
+
+**Hipoteza** (ustalona przed uruchomieniem): wyższy próg zmniejsza RMS C2C (ICP ze skalą)
+w daleko_wolno. Obali ją RMS nie mniejszy niż przy 0,333 o więcej niż szum oceny — 0,3 cm
+(powtórzenie blisko_z_gory 9.11). Progi 0,5 i 0,7 ustalone przed uruchomieniem; raportowane są
+wszystkie wyniki, także przebiegi przerwane albo ze zgubionym śledzeniem — progów się po wyniku
+nie zmienia.
+
+**Alternatywa.** Inne parametry wpływające na liczbę klatek kluczowych albo na uśrednianie
+(np. `filtering_mode`) — nie w tej analizie: zmienia się jedna wielkość.
+
+Literatura: Murai, Dexheimer, Davison 2025 (MASt3R-SLAM, CVPR) — warunek nowej klatki kluczowej, s. 5.
+
+---
+
+## 2026-11-10 — Ocena chmur w metrach z katalogów wariantów: własna nazwa i macierz, prostopadłościan nagrania
+
+**Co.** `eval/eval_all.sh` nazywa chmury w metrach od katalogu przebiegu (`<katalog>_m_<wariant>`),
+więc dla katalogów nagrań z 03.10 nazwy, macierze i wyniki E1 są te same co 9.11, a katalog wariantu
+(np. `daleko_wolno_kf050`) dostaje własną macierz `eval_cc/coarse/daleko_wolno_kf050_m_<wariant>.txt`
+(macierz nagrania · diag(1/f_global tego przebiegu)). Prostopadłościan i TLS po wycięciu bierze dla nich
+nagranie — `eval/eval_cloud.py --crop-name <nagranie>` czyta istniejący `eval_cc/crop/<nagranie>.json`
+zamiast liczyć nowy. Bez `--crop-name` `eval_cloud.py` działa jak wcześniej.
+
+**Dlaczego.** Bez tego chmura w metrach z `_kf050` dostałaby nazwę `daleko_wolno_m_global`: skrypt
+nadpisałby macierz zgrubną E1 macierzą z innym f_global, a `eval_cloud.py` odmówiłby liczenia, bo
+prostopadłościan E1 ma zapisaną inną macierz. Prostopadłościan nagrania, bo wpis z 2026-10-30 ustala
+jeden na nagranie dla wszystkich wariantów; jest w układzie TLS, więc pasuje do chmury po jej własnej
+macierzy zgrubnej. Prostopadłościany chmur w metrach z E1 (liczone z `cloud_m_global.ply`) różnią się
+od prostopadłościanów nagrań o ≤ 3,6·10⁻⁷ m.
+
+**Alternatywa: prostopadłościan z chmury wariantu** (`--crop-source` jej `cloud_m_global.ply`).
+Odrzucona — wycinek zależałby od wariantu, czyli od badanej zmiennej.
+
+Literatura: brak — decyzja inżynierska.
